@@ -79,7 +79,7 @@ fun App() {
                             currentScreen = Screen.AddMealSelection
                         },
                         onDeleteMealClick = { meal ->
-                            MockData.consumedMeals.remove(meal)
+                            MockData.deleteConsumedMeal(meal)
                         }
                     )
 
@@ -89,17 +89,7 @@ fun App() {
                         initialMeal = editingMeal,
                         onBack = { currentScreen = Screen.Dashboard },
                         onConfirm = { meal ->
-                            if (editingMeal != null) {
-                                val index = MockData.consumedMeals.indexOfFirst { it.id == editingMeal!!.id }
-                                if (index != -1) {
-                                    MockData.consumedMeals[index] = meal
-                                }
-                            } else {
-                                MockData.consumedMeals.add(0, meal)
-                                if (meal.isFromBatch) {
-                                    MockData.consumeFromBatch(meal.portions)
-                                }
-                            }
+                            MockData.upsertConsumedMeal(meal, editingMeal)
                             currentScreen = Screen.Dashboard
                         }
                     )

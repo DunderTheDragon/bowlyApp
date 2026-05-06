@@ -35,12 +35,11 @@ fun DashboardScreen(
     onEditMealClick: (ConsumedMeal) -> Unit,
     onDeleteMealClick: (ConsumedMeal) -> Unit
 ) {
-    var selectedMeal by remember { mutableStateOf<ConsumedMeal?>(null) }
     var currentDayOffset by remember { mutableStateOf(0) }
-    val mealNames = listOf("Śniadanie", "Obiad", "Kolacja")
+    val dayStart = (1715424000000L + (currentDayOffset * 86400000L))
+    val mealNames = MockData.getMealTypesForDate(dayStart)
 
     Scaffold { _ ->
-        val dayStart = 1715424000000L + (currentDayOffset * 86400000L)
         val dayEnd = dayStart + 86400000L
 
         val dayMeals = MockData.consumedMeals.filter { it.timestamp in dayStart until dayEnd }

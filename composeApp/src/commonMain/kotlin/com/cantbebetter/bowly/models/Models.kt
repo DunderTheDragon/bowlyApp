@@ -15,8 +15,13 @@ data class User(
     val weeklyChangeRateKg: Double = 0.5,
     val activityLevel: Double = 1.375, // Sedentary: 1.2, Light: 1.375, Moderate: 1.55, Active: 1.725
     val macroRatios: MacroRatios = MacroRatios(30, 30, 40), // P, F, C in %
-    val isDarkTheme: Boolean? = null // null means system default
+    val isDarkTheme: Boolean? = null, // null means system default
+    val showBatchOnboarding: Boolean = true,
+    val dailyMealConfigs: Map<Long, List<String>> = emptyMap() // Start of day (millis) -> List of meal names
 )
+
+val DefaultMealTypes = listOf("Śniadanie", "Obiad", "Kolacja")
+val AllAvailableMealTypes = listOf("Śniadanie", "II Śniadanie", "Obiad", "Podwieczorek", "Kolacja")
 
 @Serializable
 data class MacroRatios(

@@ -1,5 +1,6 @@
 package com.cantbebetter.bowly.ui.screens
 
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
@@ -14,6 +15,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import com.cantbebetter.bowly.data.MockData
+import com.cantbebetter.bowly.models.AllAvailableMealTypes
 import com.cantbebetter.bowly.models.MacroRatios
 import com.cantbebetter.bowly.models.User
 import kotlin.math.roundToInt
@@ -128,6 +130,38 @@ fun ProfileScreen() {
                 
                 MacroSlider("Węglowodany", user.macroRatios.carbs) { newVal ->
                     updateMacros(user, newVal, "carbs")
+                }
+            }
+        }
+
+        Spacer(modifier = Modifier.height(16.dp))
+
+        // Aktywne posiłki
+        Card(modifier = Modifier.fillMaxWidth()) {
+            Column(modifier = Modifier.padding(16.dp)) {
+                Text("Aktywne Posiłki", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
+                Text("Zmiany dotyczą dzisiejszego i przyszłych dni.", style = MaterialTheme.typography.labelSmall)
+                Spacer(modifier = Modifier.height(12.dp))
+                
+                val currentTypes = MockData.getMealTypesForDate(Clock.now())
+                AllAvailableMealTypes.forEach { type ->
+                    Row(
+                        modifier = Modifier.fillMaxWidth().clickable {
+                            val newTypes = if (currentTypes.contains(type)) {
+                                if (currentTypes.size > 1) currentTypes - type else currentTypes
+                            } else {
+                                (currentTypes + type).sortedBy { AllAvailableMealTypes.indexOf(it) }
+                            }
+                            MockData.updateMealTypesFromToday(newTypes)
+                        }.padding(vertical = 4.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Checkbox(
+                            checked = currentTypes.contains(type),
+                            onCheckedChange = null // Handled by row clickable
+                        )
+                        Text(type, style = MaterialTheme.typography.bodyMedium)
+                    }
                 }
             }
         }

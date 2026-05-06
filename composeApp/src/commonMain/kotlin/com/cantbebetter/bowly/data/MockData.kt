@@ -5,6 +5,7 @@ import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import com.cantbebetter.bowly.models.*
+import com.cantbebetter.bowly.ui.screens.Clock
 
 object MockData {
     var currentUser by mutableStateOf(User(
@@ -138,6 +139,50 @@ object MockData {
         dailyStats = calculateDailyStats(newUser)
     }
 
+    fun getMealTypesForDate(timestamp: Long): List<String> {
+        val startOfDay = (timestamp / 86400000L) * 86400000L
+        return currentUser.dailyMealConfigs[startOfDay] ?: DefaultMealTypes
+    }
+
+    fun updateMealTypesFromToday(newTypes: List<String>) {
+        val todayStart = (Clock.now() / 86400000L) * 86400000L
+        val updatedConfigs = currentUser.dailyMealConfigs.toMutableMap()
+        updatedConfigs[todayStart] = newTypes
+        // In a real app we'd also store this as the "future default"
+        updateCurrentUser(currentUser.copy(dailyMealConfigs = updatedConfigs))
+    }
+
+    fun upsertConsumedMeal(meal: ConsumedMeal, oldMeal: ConsumedMeal? = null) {
+        // 1. Jeśli to była edycja, wycofujemy stare porcje z patelni
+        oldMeal?.let { old ->
+            if (old.isFromBatch) {
+                undoConsumeFromBatch(old.portions)
+            }
+        }
+
+        // 2. Dodajemy/aktualizujemy posiłek w liście
+        if (oldMeal != null) {
+            val index = consumedMeals.indexOfFirst { it.id == oldMeal.id }
+            if (index != -1) {
+                consumedMeals[index] = meal
+            }
+        } else {
+            consumedMeals.add(0, meal)
+        }
+
+        // 3. Jeśli nowy posiłek jest z patelni, odejmujemy wagę
+        if (meal.isFromBatch) {
+            consumeFromBatch(meal.portions)
+        }
+    }
+
+    fun deleteConsumedMeal(meal: ConsumedMeal) {
+        if (meal.isFromBatch) {
+            undoConsumeFromBatch(meal.portions)
+        }
+        consumedMeals.remove(meal)
+    }
+
     fun consumeFromBatch(portions: List<ConsumedPortion>) {
         portions.forEach { portion ->
             val segmentId = portion.segmentId ?: return@forEach
@@ -146,6 +191,24 @@ object MockData {
                     val updatedSegments = meal.segments.map { s ->
                         if (s.id == segmentId) {
                             s.copy(currentWeightG = (s.currentWeightG - portion.consumedWeightG).coerceAtLeast(0.0))
+                        } else s
+                    }
+                    val isDepleted = updatedSegments.sumOf { it.currentWeightG } < 0.1
+                    batchMeals[mealIndex] = meal.copy(segments = updatedSegments, isDepleted = isDepleted)
+                }
+            }
+        }
+    }
+
+    private fun undoConsumeFromBatch(portions: List<ConsumedPortion>) {
+        portions.forEach { portion ->
+            val segmentId = portion.segmentId ?: return@forEach
+            batchMeals.forEachIndexed { mealIndex, meal ->
+                if (meal.segments.any { it.id == segmentId }) {
+                    val updatedSegments = meal.segments.map { s ->
+                        if (s.id == segmentId) {
+                            // Przywracamy wagę, ale nie więcej niż initialWeight
+                            s.copy(currentWeightG = (s.currentWeightG + portion.consumedWeightG).coerceAtMost(s.initialWeightG))
                         } else s
                     }
                     val isDepleted = updatedSegments.sumOf { it.currentWeightG } < 0.1
