@@ -9,9 +9,14 @@ androidx-core = "1.15.0"
 androidx-espresso = "3.6.1"
 androidx-lifecycle = "2.8.4"
 androidx-testExt = "1.2.1"
+barcode-scanning = "17.3.0"
+camera-view = "1.4.1"
+camera-lifecycle = "1.4.1"
+camera-camera2 = "1.4.1"
 composeMultiplatform = "1.7.3"
 junit = "4.13.2"
 kotlin = "2.1.0"
+kotlinx-datetime = "0.6.1"
 kotlinx-serialization = "1.7.3"
 material3 = "1.7.3"
 
@@ -19,6 +24,7 @@ material3 = "1.7.3"
 kotlin-test = { module = "org.jetbrains.kotlin:kotlin-test", version.ref = "kotlin" }
 kotlin-testJunit = { module = "org.jetbrains.kotlin:kotlin-test-junit", version.ref = "kotlin" }
 kotlinx-serialization-json = { module = "org.jetbrains.kotlinx:kotlinx-serialization-json", version.ref = "kotlinx-serialization" }
+kotlinx-datetime = { module = "org.jetbrains.kotlinx:kotlinx-datetime", version.ref = "kotlinx-datetime" }
 junit = { module = "junit:junit", version.ref = "junit" }
 androidx-core-ktx = { module = "androidx.core:core-ktx", version.ref = "androidx-core" }
 androidx-testExt-junit = { module = "androidx.test.ext:junit", version.ref = "androidx-testExt" }
@@ -37,6 +43,10 @@ compose-icons-extended = { module = "org.jetbrains.compose.material:material-ico
 compose-ui = { module = "org.jetbrains.compose.ui:ui", version.ref = "composeMultiplatform" }
 compose-components-resources = { module = "org.jetbrains.compose.components:components-resources", version.ref = "composeMultiplatform" }
 compose-uiToolingPreview = { module = "org.jetbrains.compose.ui:ui-tooling-preview", version.ref = "composeMultiplatform" }
+barcode-scanning = { module = "com.google.mlkit:barcode-scanning", version.ref = "barcode-scanning" }
+camera-view = { module = "androidx.camera:camera-view", version.ref = "camera-view" }
+camera-lifecycle = { module = "androidx.camera:camera-lifecycle", version.ref = "camera-lifecycle" }
+camera-camera2 = { module = "androidx.camera:camera-camera2", version.ref = "camera-camera2" }
 
 [plugins]
 androidApplication = { id = "com.android.application", version.ref = "agp" }

@@ -10,6 +10,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ArrowBack
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Search
+import androidx.compose.material.icons.filled.QrCodeScanner
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -19,8 +20,11 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.ui.window.Dialog
+import androidx.compose.ui.window.DialogProperties
 import com.cantbebetter.bowly.data.MockData
 import com.cantbebetter.bowly.models.*
+import com.cantbebetter.bowly.ui.components.BarcodeScannerView
 
 @Composable
 fun AddMealSelectionScreen(
@@ -112,9 +116,49 @@ fun AddMealSelectionScreen(
 @Composable
 fun ProductSearchList(onProductSelected: (Product) -> Unit) {
     var query by remember { mutableStateOf("") }
+    var showScanner by remember { mutableStateOf(false) }
+    var showAddDialog by remember { mutableStateOf(false) }
+    var barcodeToPreFill by remember { mutableStateOf<String?>(null) }
+
     val filteredProducts = remember(query) {
         if (query.isEmpty()) MockData.products
-        else MockData.products.filter { it.name.contains(query, ignoreCase = true) }
+        else MockData.products.filter { 
+            it.name.contains(query, ignoreCase = true) || it.barcode == query
+        }
+    }
+
+    if (showScanner) {
+        Dialog(onDismissRequest = { showScanner = false }, properties = DialogProperties(usePlatformDefaultWidth = false)) {
+            BarcodeScannerView(
+                onBarcodeDetected = { code ->
+                    val found = MockData.products.find { it.barcode == code }
+                    if (found != null) {
+                        onProductSelected(found)
+                        showScanner = false
+                    } else {
+                        barcodeToPreFill = code
+                        showAddDialog = true
+                        showScanner = false
+                    }
+                },
+                onClose = { showScanner = false }
+            )
+        }
+    }
+
+    if (showAddDialog) {
+        AddProductDialog(
+            preFilledBarcode = barcodeToPreFill,
+            onDismiss = { 
+                showAddDialog = false
+                barcodeToPreFill = null
+            },
+            onConfirm = { newProduct ->
+                MockData.products.add(newProduct)
+                onProductSelected(newProduct)
+                showAddDialog = false
+            }
+        )
     }
 
     Column {
@@ -124,13 +168,20 @@ fun ProductSearchList(onProductSelected: (Product) -> Unit) {
             modifier = Modifier.fillMaxWidth().padding(16.dp),
             placeholder = { Text("Szukaj produktu...") },
             leadingIcon = { Icon(Icons.Default.Search, contentDescription = null) },
+            trailingIcon = {
+                IconButton(onClick = { showScanner = true }) {
+                    Icon(Icons.Default.QrCodeScanner, "Skanuj", tint = MaterialTheme.colorScheme.primary)
+                }
+            },
             singleLine = true
         )
         LazyColumn {
             items(filteredProducts) { product ->
                 ListItem(
                     headlineContent = { Text(product.name) },
-                    supportingContent = { Text("${product.calories.toInt()} kcal / 100g") },
+                    supportingContent = { 
+                        Text("${product.calories.toInt()} kcal/100g | B: ${product.protein} T: ${product.fat} W: ${product.carbs}") 
+                    },
                     modifier = Modifier.clickable { onProductSelected(product) }
                 )
             }

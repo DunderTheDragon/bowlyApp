@@ -38,9 +38,19 @@ data class Product(
     val protein: Double,
     val fat: Double,
     val carbs: Double,
+    val barcode: String? = null,
     val unitName: String = "opakowanie",
     val unitWeightG: Double = 100.0,
+    val micros: MicroElements = MicroElements(),
     val source: String // "API" or "USER"
+)
+
+@Serializable
+data class MicroElements(
+    val fiber: Double? = null,
+    val sugar: Double? = null,
+    val salt: Double? = null,
+    val saturatedFat: Double? = null
 )
 
 @Serializable

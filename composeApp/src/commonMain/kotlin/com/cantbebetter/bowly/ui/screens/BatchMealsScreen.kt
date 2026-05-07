@@ -29,8 +29,12 @@ import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.ui.zIndex
+import androidx.compose.ui.window.Dialog
+import androidx.compose.ui.window.DialogProperties
 import com.cantbebetter.bowly.data.MockData
 import com.cantbebetter.bowly.models.*
+import com.cantbebetter.bowly.ui.components.BarcodeScannerView
 
 data class SectionData(
     val id: String,
@@ -777,11 +781,54 @@ fun MealCard(meal: BatchMeal, onTakePortion: () -> Unit) {
 }
 
 @Composable
-fun SimpleProductSearchDialog(onDismiss: () -> Unit, onProductSelected: (Product) -> Unit) {
+fun SimpleProductSearchDialog(
+    onDismiss: () -> Unit,
+    onProductSelected: (Product) -> Unit
+) {
     var query by remember { mutableStateOf("") }
+    var showAddDialog by remember { mutableStateOf(false) }
+    var barcodeToPreFill by remember { mutableStateOf<String?>(null) }
+    var showScanner by remember { mutableStateOf(false) }
+
     val filteredProducts = remember(query) {
         if (query.isEmpty()) MockData.products
-        else MockData.products.filter { it.name.contains(query, ignoreCase = true) }
+        else MockData.products.filter { 
+            it.name.contains(query, ignoreCase = true) || it.barcode == query 
+        }
+    }
+
+    if (showAddDialog) {
+        AddProductDialog(
+            preFilledBarcode = barcodeToPreFill,
+            onDismiss = { 
+                showAddDialog = false
+                barcodeToPreFill = null
+            },
+            onConfirm = { newProduct ->
+                MockData.products.add(newProduct)
+                onProductSelected(newProduct)
+                showAddDialog = false
+            }
+        )
+    }
+
+    if (showScanner) {
+        Dialog(onDismissRequest = { showScanner = false }, properties = DialogProperties(usePlatformDefaultWidth = false)) {
+            BarcodeScannerView(
+                onBarcodeDetected = { code ->
+                    val found = MockData.products.find { it.barcode == code }
+                    if (found != null) {
+                        onProductSelected(found)
+                        showScanner = false
+                    } else {
+                        barcodeToPreFill = code
+                        showAddDialog = true
+                        showScanner = false
+                    }
+                },
+                onClose = { showScanner = false }
+            )
+        }
     }
 
     AlertDialog(
@@ -793,22 +840,237 @@ fun SimpleProductSearchDialog(onDismiss: () -> Unit, onProductSelected: (Product
                     value = query,
                     onValueChange = { query = it },
                     modifier = Modifier.fillMaxWidth(),
-                    placeholder = { Text("Np. Kurczak...") },
+                    placeholder = { Text("Nazwa lub kod kreskowy...") },
                     leadingIcon = { Icon(Icons.Default.Search, null) },
+                    trailingIcon = {
+                        IconButton(onClick = { showScanner = true }) {
+                            Icon(Icons.Default.QrCodeScanner, "Skanuj", tint = MaterialTheme.colorScheme.primary)
+                        }
+                    },
                     singleLine = true
                 )
+                
                 Spacer(modifier = Modifier.height(8.dp))
-                LazyColumn(modifier = Modifier.heightIn(max = 400.dp)) {
-                    items(filteredProducts) { product ->
-                        ListItem(
-                            headlineContent = { Text(product.name) },
-                            modifier = Modifier.clickable { onProductSelected(product) }
-                        )
+                
+                if (filteredProducts.isEmpty() && query.isNotEmpty()) {
+                    Box(modifier = Modifier.fillMaxWidth().padding(vertical = 16.dp), contentAlignment = Alignment.Center) {
+                        Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                            Text("Nie znaleziono produktu", color = MaterialTheme.colorScheme.onSurfaceVariant)
+                            Spacer(modifier = Modifier.height(8.dp))
+                            Button(onClick = { showAddDialog = true }) {
+                                Text("Dodaj nowy produkt")
+                            }
+                        }
+                    }
+                } else {
+                    LazyColumn(modifier = Modifier.heightIn(max = 400.dp)) {
+                        items(filteredProducts) { product ->
+                            ListItem(
+                                headlineContent = { Text(product.name) },
+                                supportingContent = { 
+                                    Text("${product.calories.toInt()} kcal/100g | B: ${product.protein} T: ${product.fat} W: ${product.carbs}") 
+                                },
+                                modifier = Modifier.clickable { onProductSelected(product) }
+                            )
+                        }
+                        
+                        item {
+                            HorizontalDivider(modifier = Modifier.padding(vertical = 8.dp))
+                            TextButton(
+                                onClick = { showAddDialog = true },
+                                modifier = Modifier.fillMaxWidth()
+                            ) {
+                                Icon(Icons.Default.Add, null)
+                                Spacer(modifier = Modifier.width(8.dp))
+                                Text("Dodaj produkt spoza listy")
+                            }
+                        }
                     }
                 }
             }
         },
         confirmButton = {},
         dismissButton = { TextButton(onClick = onDismiss) { Text("Zamknij") } }
+    )
+}
+
+@Composable
+fun AddProductDialog(
+    preFilledBarcode: String? = null,
+    onDismiss: () -> Unit,
+    onConfirm: (Product) -> Unit
+) {
+    var name by remember { mutableStateOf("") }
+    var barcode by remember { mutableStateOf(preFilledBarcode ?: "") }
+    var calories by remember { mutableStateOf("") }
+    var protein by remember { mutableStateOf("") }
+    var fat by remember { mutableStateOf("") }
+    var carbs by remember { mutableStateOf("") }
+    
+    var unitName by remember { mutableStateOf("sztuka") }
+    var unitWeightG by remember { mutableStateOf("") }
+    
+    var fiber by remember { mutableStateOf("") }
+    var sugar by remember { mutableStateOf("") }
+    var salt by remember { mutableStateOf("") }
+    var saturatedFat by remember { mutableStateOf("") }
+    
+    var showAdvanced by remember { mutableStateOf(false) }
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        modifier = Modifier.fillMaxWidth().fillMaxHeight(0.9f),
+        properties = androidx.compose.ui.window.DialogProperties(usePlatformDefaultWidth = false),
+        title = { Text("Nowy produkt") },
+        text = {
+            Column(modifier = Modifier.verticalScroll(rememberScrollState()).padding(horizontal = 4.dp)) {
+                OutlinedTextField(value = name, onValueChange = { name = it }, label = { Text("Nazwa produktu") }, modifier = Modifier.fillMaxWidth())
+                OutlinedTextField(value = barcode, onValueChange = { barcode = it }, label = { Text("Kod kreskowy (opcjonalnie)") }, modifier = Modifier.fillMaxWidth())
+                
+                Spacer(modifier = Modifier.height(16.dp))
+                
+                // Makroskładniki w ramce
+                Box(modifier = Modifier.fillMaxWidth().padding(top = 8.dp)) {
+                    Surface(
+                        modifier = Modifier
+                            .offset(x = 12.dp, y = (-10).dp)
+                            .zIndex(1f),
+                        color = MaterialTheme.colorScheme.surface
+                    ) {
+                        Text(
+                            " na 100g* ",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.primary,
+                            modifier = Modifier.padding(horizontal = 4.dp)
+                        )
+                    }
+                    
+                    Column(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .border(1.dp, MaterialTheme.colorScheme.outline, RoundedCornerShape(4.dp))
+                            .padding(12.dp),
+                        verticalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            OutlinedTextField(value = calories, onValueChange = { calories = it }, label = { Text("Kcal") }, modifier = Modifier.weight(1f), keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number))
+                            OutlinedTextField(value = protein, onValueChange = { protein = it }, label = { Text("B") }, modifier = Modifier.weight(1f), keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number))
+                        }
+                        Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            OutlinedTextField(value = fat, onValueChange = { fat = it }, label = { Text("T") }, modifier = Modifier.weight(1f), keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number))
+                            OutlinedTextField(value = carbs, onValueChange = { carbs = it }, label = { Text("W") }, modifier = Modifier.weight(1f), keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number))
+                        }
+                    }
+                }
+
+                Spacer(modifier = Modifier.height(16.dp))
+                Text("Domyślna jednostka:", style = MaterialTheme.typography.labelMedium)
+                Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
+                    OutlinedTextField(value = unitName, onValueChange = { unitName = it }, label = { Text("Nazwa (np. sztuka)") }, modifier = Modifier.weight(1.5f))
+                    OutlinedTextField(value = unitWeightG, onValueChange = { unitWeightG = it }, label = { Text("Waga (g)") }, modifier = Modifier.weight(1f), keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number))
+                }
+
+                Spacer(modifier = Modifier.height(8.dp))
+                TextButton(onClick = { showAdvanced = !showAdvanced }) {
+                    Text(if (showAdvanced) "Ukryj opcje zaawansowane" else "Pokaż opcje zaawansowane (mikroelementy)")
+                    Icon(if (showAdvanced) Icons.Default.ExpandLess else Icons.Default.ExpandMore, null)
+                }
+
+                if (showAdvanced) {
+                    Box(modifier = Modifier.fillMaxWidth().padding(top = 16.dp)) {
+                        Surface(
+                            modifier = Modifier
+                                .offset(x = 12.dp, y = (-10).dp)
+                                .zIndex(1f),
+                            color = MaterialTheme.colorScheme.surface
+                        ) {
+                            Text(
+                                " mikro / 100g ",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.primary,
+                                modifier = Modifier.padding(horizontal = 4.dp)
+                            )
+                        }
+                        
+                        Column(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .border(1.dp, MaterialTheme.colorScheme.outline, RoundedCornerShape(4.dp))
+                                .padding(12.dp),
+                            verticalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
+                            Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                OutlinedTextField(
+                                    value = fiber, 
+                                    onValueChange = { fiber = it }, 
+                                    label = { Text("Błonnik") }, 
+                                    placeholder = { Text("brak", style = MaterialTheme.typography.bodySmall.copy(color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.5f))) },
+                                    modifier = Modifier.weight(1f), 
+                                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number)
+                                )
+                                OutlinedTextField(
+                                    value = sugar, 
+                                    onValueChange = { sugar = it }, 
+                                    label = { Text("Cukry") }, 
+                                    placeholder = { Text("brak", style = MaterialTheme.typography.bodySmall.copy(color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.5f))) },
+                                    modifier = Modifier.weight(1f), 
+                                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number)
+                                )
+                            }
+                            Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                OutlinedTextField(
+                                    value = salt, 
+                                    onValueChange = { salt = it }, 
+                                    label = { Text("Sól") }, 
+                                    placeholder = { Text("brak", style = MaterialTheme.typography.bodySmall.copy(color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.5f))) },
+                                    modifier = Modifier.weight(1f), 
+                                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number)
+                                )
+                                OutlinedTextField(
+                                    value = saturatedFat, 
+                                    onValueChange = { saturatedFat = it }, 
+                                    label = { Text("Nasycone") },
+                                    placeholder = { Text("brak", style = MaterialTheme.typography.bodySmall.copy(color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.5f))) },
+                                    modifier = Modifier.weight(1f), 
+                                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number)
+                                )
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        confirmButton = {
+            val macroComplete = calories.isNotBlank() && protein.isNotBlank() && fat.isNotBlank() && carbs.isNotBlank()
+            Button(
+                onClick = {
+                    val product = Product(
+                        id = "user_p_${Clock.uniqueId()}",
+                        name = name,
+                        calories = calories.toDoubleOrNull() ?: 0.0,
+                        protein = protein.toDoubleOrNull() ?: 0.0,
+                        fat = fat.toDoubleOrNull() ?: 0.0,
+                        carbs = carbs.toDoubleOrNull() ?: 0.0,
+                        barcode = barcode.ifBlank { null },
+                        unitName = unitName,
+                        unitWeightG = unitWeightG.toDoubleOrNull() ?: 100.0,
+                        micros = MicroElements(
+                            fiber = if (fiber.isBlank()) null else fiber.toDoubleOrNull(),
+                            sugar = if (sugar.isBlank()) null else sugar.toDoubleOrNull(),
+                            salt = if (salt.isBlank()) null else salt.toDoubleOrNull(),
+                            saturatedFat = if (saturatedFat.isBlank()) null else saturatedFat.toDoubleOrNull()
+                        ),
+                        source = "USER"
+                    )
+                    onConfirm(product)
+                },
+                enabled = name.isNotBlank() && macroComplete
+            ) {
+                Text("Dodaj produkt")
+            }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss) { Text("Anuluj") }
+        }
     )
 }

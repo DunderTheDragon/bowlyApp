@@ -30,6 +30,10 @@ kotlin {
         androidMain.dependencies {
             implementation(libs.compose.uiToolingPreview)
             implementation(libs.androidx.activity.compose)
+            implementation(libs.barcode.scanning)
+            implementation(libs.camera.view)
+            implementation(libs.camera.lifecycle)
+            implementation(libs.camera.camera2)
         }
         commonMain.dependencies {
             implementation(libs.compose.runtime)
@@ -43,6 +47,7 @@ kotlin {
             implementation(libs.androidx.lifecycle.viewmodelCompose)
             implementation(libs.androidx.lifecycle.runtimeCompose)
             implementation(libs.kotlinx.serialization.json)
+            implementation(libs.kotlinx.datetime)
         }
         commonTest.dependencies {
             implementation(libs.kotlin.test)

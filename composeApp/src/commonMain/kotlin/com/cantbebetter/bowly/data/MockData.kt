@@ -22,22 +22,22 @@ object MockData {
         macroRatios = MacroRatios(30, 25, 45)
     ))
 
-    val products = listOf(
-        Product("p1", "Kurczak (Pierś)", 165.0, 31.0, 3.6, 0.0, "sztuka", 200.0, "API"),
-        Product("p2", "Ryż Biały", 130.0, 2.7, 0.3, 28.0, "opakowanie", 100.0, "API"),
-        Product("p3", "Oliwa z oliwek", 884.0, 0.0, 100.0, 0.0, "łyżka", 10.0, "USER"),
-        Product("p4", "Sos Pomidorowy", 40.0, 1.5, 0.2, 8.0, "słoik", 400.0, "API"),
-        Product("p5", "Płatki owsiane", 379.0, 13.0, 7.0, 68.0, "opakowanie", 500.0, "API"),
-        Product("p6", "Mleko 2%", 50.0, 3.4, 2.0, 4.7, "szklanka", 250.0, "API"),
-        Product("p7", "Twaróg chudy", 90.0, 18.0, 0.5, 3.5, "kostka", 200.0, "API"),
-        Product("p8", "Ziemniaki gotowane", 77.0, 2.0, 0.1, 17.0, "sztuka (średnia)", 90.0, "API"),
-        Product("p9", "Makaron Penne", 150.0, 5.0, 1.0, 30.0, "szklanka (gotowany)", 140.0, "API"),
-        Product("p10", "Jajko Kurze", 143.0, 12.6, 9.5, 0.7, "sztuka (L)", 56.0, "API"),
-        Product("p11", "Chleb Żytni", 259.0, 8.5, 3.3, 48.0, "kromka", 35.0, "API"),
-        Product("p12", "Szynka Konserwowa", 110.0, 18.0, 3.0, 1.5, "plaster", 20.0, "API"),
-        Product("p13", "Banan", 89.0, 1.1, 0.3, 23.0, "sztuka", 120.0, "API"),
-        Product("p14", "Masło", 717.0, 0.8, 81.0, 0.1, "łyżeczka", 5.0, "API"),
-        Product("p15", "Jabłko", 52.0, 0.3, 0.2, 14.0, "sztuka", 180.0, "API")
+    val products = mutableStateListOf(
+        Product("p1", "Kurczak (Pierś)", 165.0, 31.0, 3.6, 0.0, null, "sztuka", 200.0, MicroElements(), "API"),
+        Product("p2", "Ryż Biały", 130.0, 2.7, 0.3, 28.0, "5900000000001", "opakowanie", 100.0, MicroElements(), "API"),
+        Product("p3", "Oliwa z oliwek", 884.0, 0.0, 100.0, 0.0, null, "łyżka", 10.0, MicroElements(), "USER"),
+        Product("p4", "Sos Pomidorowy", 40.0, 1.5, 0.2, 8.0, "5900000000002", "słoik", 400.0, MicroElements(), "API"),
+        Product("p5", "Płatki owsiane", 379.0, 13.0, 7.0, 68.0, null, "opakowanie", 500.0, MicroElements(), "API"),
+        Product("p6", "Mleko 2%", 50.0, 3.4, 2.0, 4.7, "5900000000003", "szklanka", 250.0, MicroElements(), "API"),
+        Product("p7", "Twaróg chudy", 90.0, 18.0, 0.5, 3.5, null, "kostka", 200.0, MicroElements(), "API"),
+        Product("p8", "Ziemniaki gotowane", 77.0, 2.0, 0.1, 17.0, null, "sztuka (średnia)", 90.0, MicroElements(), "API"),
+        Product("p9", "Makaron Penne", 150.0, 5.0, 1.0, 30.0, null, "szklanka (gotowany)", 140.0, MicroElements(), "API"),
+        Product("p10", "Jajko Kurze", 143.0, 12.6, 9.5, 0.7, null, "sztuka (L)", 56.0, MicroElements(), "API"),
+        Product("p11", "Chleb Żytni", 259.0, 8.5, 3.3, 48.0, null, "kromka", 35.0, MicroElements(), "API"),
+        Product("p12", "Szynka Konserwowa", 110.0, 18.0, 3.0, 1.5, null, "plaster", 20.0, MicroElements(), "API"),
+        Product("p13", "Banan", 89.0, 1.1, 0.3, 23.0, null, "sztuka", 120.0, MicroElements(), "API"),
+        Product("p14", "Masło", 717.0, 0.8, 81.0, 0.1, null, "łyżeczka", 5.0, MicroElements(), "API"),
+        Product("p15", "Jabłko", 52.0, 0.3, 0.2, 14.0, null, "sztuka", 180.0, MicroElements(), "API")
     )
 
     val batchMeals = mutableStateListOf(

@@ -5,8 +5,10 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.ChevronRight
 import androidx.compose.material.icons.filled.DarkMode
 import androidx.compose.material.icons.filled.LightMode
+import androidx.compose.material.icons.filled.List
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -21,7 +23,7 @@ import com.cantbebetter.bowly.models.User
 import kotlin.math.roundToInt
 
 @Composable
-fun ProfileScreen() {
+fun ProfileScreen(onMyProductsClick: () -> Unit) {
     val user = MockData.currentUser
     val scrollState = rememberScrollState()
 
@@ -50,6 +52,27 @@ fun ProfileScreen() {
         Text(user.email, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
         
         Spacer(modifier = Modifier.height(24.dp))
+
+        // Moje Produkty Button
+        Card(
+            modifier = Modifier.fillMaxWidth().clickable { onMyProductsClick() },
+            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.secondaryContainer.copy(alpha = 0.5f))
+        ) {
+            Row(
+                modifier = Modifier.padding(16.dp).fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Icon(Icons.Default.List, null)
+                    Spacer(modifier = Modifier.width(12.dp))
+                    Text("Moje produkty", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
+                }
+                Icon(Icons.Default.ChevronRight, null)
+            }
+        }
+
+        Spacer(modifier = Modifier.height(16.dp))
 
         // Motyw
         Card(modifier = Modifier.fillMaxWidth()) {

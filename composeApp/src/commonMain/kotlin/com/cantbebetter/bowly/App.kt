@@ -13,12 +13,13 @@ import com.cantbebetter.bowly.ui.screens.BatchMealsScreen
 import com.cantbebetter.bowly.ui.screens.DashboardScreen
 import com.cantbebetter.bowly.ui.screens.ProfileScreen
 import com.cantbebetter.bowly.ui.screens.AddMealSelectionScreen
+import com.cantbebetter.bowly.ui.screens.MyProductsScreen
 import androidx.compose.ui.tooling.preview.Preview
 import com.cantbebetter.bowly.data.MockData
 import com.cantbebetter.bowly.models.ConsumedMeal
 
 enum class Screen {
-    Dashboard, BatchMeals, Profile, AddMealSelection
+    Dashboard, BatchMeals, Profile, AddMealSelection, MyProducts
 }
 
 @Composable
@@ -94,7 +95,12 @@ fun App() {
                         }
                     )
 
-                    Screen.Profile -> ProfileScreen()
+                    Screen.Profile -> ProfileScreen(
+                        onMyProductsClick = { currentScreen = Screen.MyProducts }
+                    )
+                    Screen.MyProducts -> MyProductsScreen(
+                        onBack = { currentScreen = Screen.Profile }
+                    )
                 }
             }
         }
