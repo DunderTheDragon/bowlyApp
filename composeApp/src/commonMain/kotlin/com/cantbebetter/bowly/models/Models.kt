@@ -58,7 +58,28 @@ data class BatchMeal(
     val id: String,
     val name: String,
     val segments: List<BatchMealSegment>,
-    val isDepleted: Boolean = false
+    val isDepleted: Boolean = false,
+    val recipeId: String? = null // Reference to the recipe it was created from
+)
+
+@Serializable
+data class Recipe(
+    val id: String,
+    val name: String,
+    val sections: List<RecipeSection>
+)
+
+@Serializable
+data class RecipeSection(
+    val id: String,
+    val name: String,
+    val ingredients: List<RecipeIngredient>
+)
+
+@Serializable
+data class RecipeIngredient(
+    val product: Product,
+    val weightG: Double
 )
 
 @Serializable

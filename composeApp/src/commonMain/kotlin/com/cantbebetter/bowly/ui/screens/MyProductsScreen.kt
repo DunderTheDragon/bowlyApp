@@ -24,32 +24,57 @@ import androidx.compose.ui.zIndex
 import com.cantbebetter.bowly.data.MockData
 import com.cantbebetter.bowly.models.MicroElements
 import com.cantbebetter.bowly.models.Product
+import com.cantbebetter.bowly.models.Recipe
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun MyProductsScreen(onBack: () -> Unit) {
+    var selectedTab by remember { mutableIntStateOf(0) }
+    val tabs = listOf("Produkty", "Przepisy")
+
     var searchQuery by remember { mutableStateOf("") }
     var editingProduct by remember { mutableStateOf<Product?>(null) }
     var showAddDialog by remember { mutableStateOf(false) }
+    
+    // Recipe editing state
+    var editingRecipe by remember { mutableStateOf<Recipe?>(null) }
+    var recipeToDelete by remember { mutableStateOf<Recipe?>(null) }
 
     val filteredProducts = MockData.products.filter {
         it.source == "USER" && (it.name.contains(searchQuery, ignoreCase = true) || (it.barcode?.contains(searchQuery) == true))
     }
+    
+    val filteredRecipes = MockData.recipes.filter {
+        it.name.contains(searchQuery, ignoreCase = true)
+    }
 
     Scaffold(
         topBar = {
-            TopAppBar(
-                title = { Text("Moje produkty") },
-                navigationIcon = {
-                    IconButton(onClick = onBack) {
-                        Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Wróć")
+            Column {
+                TopAppBar(
+                    title = { Text("Moje produkty i przepisy") },
+                    navigationIcon = {
+                        IconButton(onClick = onBack) {
+                            Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Wróć")
+                        }
+                    }
+                )
+                TabRow(selectedTabIndex = selectedTab) {
+                    tabs.forEachIndexed { index, title ->
+                        Tab(
+                            selected = selectedTab == index,
+                            onClick = { selectedTab = index },
+                            text = { Text(title) }
+                        )
                     }
                 }
-            )
+            }
         },
         floatingActionButton = {
-            FloatingActionButton(onClick = { showAddDialog = true }) {
-                Icon(Icons.Default.Add, contentDescription = "Dodaj produkt")
+            if (selectedTab == 0) {
+                FloatingActionButton(onClick = { showAddDialog = true }) {
+                    Icon(Icons.Default.Add, contentDescription = "Dodaj produkt")
+                }
             }
         }
     ) { padding ->
@@ -58,33 +83,80 @@ fun MyProductsScreen(onBack: () -> Unit) {
                 value = searchQuery,
                 onValueChange = { searchQuery = it },
                 modifier = Modifier.fillMaxWidth().padding(16.dp),
-                placeholder = { Text("Szukaj w swoich produktach...") },
+                placeholder = { Text(if (selectedTab == 0) "Szukaj w produktach..." else "Szukaj w przepisach...") },
                 leadingIcon = { Icon(Icons.Default.Search, null) },
                 singleLine = true
             )
 
-            if (filteredProducts.isEmpty()) {
-                Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                    Text("Brak własnych produktów", color = MaterialTheme.colorScheme.onSurfaceVariant)
+            if (selectedTab == 0) {
+                // Products Tab
+                if (filteredProducts.isEmpty()) {
+                    Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                        Text("Brak własnych produktów", color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    }
+                } else {
+                    LazyColumn(
+                        modifier = Modifier.fillMaxSize(),
+                        contentPadding = PaddingValues(bottom = 80.dp)
+                    ) {
+                        items(filteredProducts) { product ->
+                            ListItem(
+                                headlineContent = { Text(product.name) },
+                                supportingContent = {
+                                    Text("${product.calories.toInt()} kcal/100g | B: ${product.protein} T: ${product.fat} W: ${product.carbs}")
+                                },
+                                trailingContent = {
+                                    IconButton(onClick = { editingProduct = product }) {
+                                        Icon(Icons.Default.Edit, contentDescription = "Edytuj")
+                                    }
+                                },
+                                modifier = Modifier.clickable { editingProduct = product }
+                            )
+                        }
+                    }
                 }
             } else {
-                LazyColumn(
-                    modifier = Modifier.fillMaxSize(),
-                    contentPadding = PaddingValues(bottom = 80.dp)
-                ) {
-                    items(filteredProducts) { product ->
-                        ListItem(
-                            headlineContent = { Text(product.name) },
-                            supportingContent = {
-                                Text("${product.calories.toInt()} kcal/100g | B: ${product.protein} T: ${product.fat} W: ${product.carbs}")
-                            },
-                            trailingContent = {
-                                IconButton(onClick = { editingProduct = product }) {
-                                    Icon(Icons.Default.Edit, contentDescription = "Edytuj")
+                // Recipes Tab
+                if (filteredRecipes.isEmpty()) {
+                    Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                        Text("Brak przepisów", color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    }
+                } else {
+                    LazyColumn(
+                        modifier = Modifier.fillMaxSize(),
+                        contentPadding = PaddingValues(bottom = 80.dp)
+                    ) {
+                        items(filteredRecipes) { recipe ->
+                            val totalWeight = recipe.sections.sumOf { it.ingredients.sumOf { i -> i.weightG } }
+                            val totalCalories = recipe.sections.sumOf { it.ingredients.sumOf { i -> (i.weightG / 100.0) * i.product.calories } }
+                            val totalProtein = recipe.sections.sumOf { it.ingredients.sumOf { i -> (i.weightG / 100.0) * i.product.protein } }
+                            val totalFat = recipe.sections.sumOf { it.ingredients.sumOf { i -> (i.weightG / 100.0) * i.product.fat } }
+                            val totalCarbs = recipe.sections.sumOf { it.ingredients.sumOf { i -> (i.weightG / 100.0) * i.product.carbs } }
+                            
+                            ListItem(
+                                headlineContent = { Text(recipe.name) },
+                                supportingContent = {
+                                    Column {
+                                        Text("Waga: ${totalWeight.toInt()}g | ${totalCalories.toInt()} kcal")
+                                        Text("B: ${totalProtein.toInt()} T: ${totalFat.toInt()} W: ${totalCarbs.toInt()}", style = MaterialTheme.typography.labelSmall)
+                                    }
+                                },
+                                trailingContent = {
+                                    Row {
+                                        IconButton(onClick = { editingRecipe = recipe }) {
+                                            Icon(Icons.Default.Edit, contentDescription = "Edytuj")
+                                        }
+                                        IconButton(onClick = { recipeToDelete = recipe }) {
+                                            Icon(Icons.Default.Delete, contentDescription = "Usuń", tint = MaterialTheme.colorScheme.error)
+                                        }
+                                    }
+                                },
+                                modifier = Modifier.clickable { 
+                                    // Clicking a recipe in MyProducts could either edit it or start a new BatchMeal
+                                    editingRecipe = recipe 
                                 }
-                            },
-                            modifier = Modifier.clickable { editingProduct = product }
-                        )
+                            )
+                        }
                     }
                 }
             }
@@ -124,6 +196,46 @@ fun MyProductsScreen(onBack: () -> Unit) {
                     MockData.products[index] = updatedProduct
                 }
                 editingProduct = null
+            }
+        )
+    }
+    
+    if (editingRecipe != null) {
+        // Reuse CreateBatchMealDialog for editing recipe or starting a new batch from it
+        CreateBatchMealDialog(
+            initialRecipe = editingRecipe,
+            isEditingRecipe = true,
+            onDismiss = { editingRecipe = null },
+            onConfirm = { /* Not used in isEditingRecipe mode */ },
+            onRecipeConfirm = { updatedRecipe ->
+                val index = MockData.recipes.indexOfFirst { it.id == updatedRecipe.id }
+                if (index != -1) {
+                    MockData.recipes[index] = updatedRecipe
+                }
+                editingRecipe = null
+            }
+        )
+    }
+
+    if (recipeToDelete != null) {
+        AlertDialog(
+            onDismissRequest = { recipeToDelete = null },
+            title = { Text("Usuń przepis") },
+            text = { Text("Czy na pewno chcesz trwale usunąć przepis \"${recipeToDelete?.name}\"?") },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        MockData.recipes.remove(recipeToDelete)
+                        recipeToDelete = null
+                    }
+                ) {
+                    Text("Usuń", color = MaterialTheme.colorScheme.error)
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { recipeToDelete = null }) {
+                    Text("Anuluj")
+                }
             }
         )
     }

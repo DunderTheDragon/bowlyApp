@@ -40,6 +40,21 @@ object MockData {
         Product("p15", "Jabłko", 52.0, 0.3, 0.2, 14.0, null, "sztuka", 180.0, MicroElements(), "API")
     )
 
+    val recipes = mutableStateListOf(
+        Recipe(
+            "r1",
+            "Kurczak z ryżem i sosem",
+            listOf(
+                RecipeSection("rs1", "Ryż", listOf(RecipeIngredient(products[1], 200.0))),
+                RecipeSection("rs2", "Kurczak w sosie", listOf(
+                    RecipeIngredient(products[0], 500.0),
+                    RecipeIngredient(products[3], 400.0),
+                    RecipeIngredient(products[2], 10.0)
+                ))
+            )
+        )
+    )
+
     val batchMeals = mutableStateListOf(
         BatchMeal(
             "bm1",

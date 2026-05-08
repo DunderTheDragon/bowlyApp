@@ -192,13 +192,43 @@ fun OnboardingPage(page: Int) {
 
 @Composable
 fun CreateBatchMealDialog(
+    initialMeal: BatchMeal? = null,
+    initialRecipe: Recipe? = null,
+    isEditingRecipe: Boolean = false,
     onDismiss: () -> Unit,
-    onConfirm: (BatchMeal) -> Unit
+    onConfirm: (BatchMeal) -> Unit,
+    onRecipeConfirm: (Recipe) -> Unit = {}
 ) {
     val keyboardController = androidx.compose.ui.platform.LocalSoftwareKeyboardController.current
-    var mealName by remember { mutableStateOf("") }
-    val sections = remember { mutableStateListOf<SectionData>(SectionData(id = "s_${Clock.uniqueId()}", name = "Główna część")) }
+    var mealName by remember { mutableStateOf(initialMeal?.name ?: initialRecipe?.name ?: "") }
+    
+    val initialSections = remember {
+        val list = mutableListOf<SectionData>()
+        if (initialMeal != null) {
+            initialMeal.segments.forEach { segment ->
+                list.add(SectionData(
+                    id = segment.id,
+                    name = segment.name,
+                    products = listOf(ProductData(segment.product, segment.initialWeightG))
+                ))
+            }
+        } else if (initialRecipe != null) {
+            initialRecipe.sections.forEach { section ->
+                list.add(SectionData(
+                    id = section.id,
+                    name = section.name,
+                    products = section.ingredients.map { ProductData(it.product, it.weightG) }
+                ))
+            }
+        } else {
+            list.add(SectionData(id = "s_${Clock.uniqueId()}", name = "Główna część"))
+        }
+        list
+    }
+    
+    val sections = remember { mutableStateListOf<SectionData>().apply { addAll(initialSections) } }
     var activeSectionIdForSearch by remember { mutableStateOf<String?>(null) }
+    var saveAsRecipe by remember { mutableStateOf(false) }
 
     val totalWeight = sections.sumOf { it.products.sumOf { p -> p.weightG } }
 
@@ -212,7 +242,12 @@ fun CreateBatchMealDialog(
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 IconButton(onClick = onDismiss) { Icon(Icons.Default.Close, null) }
-                Text("Nowa patelnia", style = MaterialTheme.typography.titleLarge)
+                val title = when {
+                    isEditingRecipe -> "Edytuj przepis"
+                    initialMeal != null -> "Edytuj patelnię"
+                    else -> "Nowa patelnia"
+                }
+                Text(title, style = MaterialTheme.typography.titleLarge)
             }
         },
         text = {
@@ -259,7 +294,7 @@ fun CreateBatchMealDialog(
                         Spacer(modifier = Modifier.height(8.dp))
 
                         LazyColumn(
-                            modifier = Modifier.fillMaxWidth().heightIn(max = 500.dp),
+                            modifier = Modifier.fillMaxWidth().heightIn(max = 450.dp),
                             contentPadding = PaddingValues(top = 20.dp, bottom = 16.dp)
                         ) {
                             items(sections, key = { it.id }) { section ->
@@ -311,6 +346,16 @@ fun CreateBatchMealDialog(
                                         sections[sectionIndex] = section.copy(products = updatedProducts)
                                     }
                                 )
+                            }
+                        }
+                        
+                        if (initialRecipe == null && initialMeal == null) {
+                            Row(
+                                modifier = Modifier.fillMaxWidth().padding(horizontal = 8.dp, vertical = 8.dp),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Checkbox(checked = saveAsRecipe, onCheckedChange = { saveAsRecipe = it })
+                                Text("Zapisz jako przepis", style = MaterialTheme.typography.bodyMedium)
                             }
                         }
                     }
@@ -366,44 +411,71 @@ fun CreateBatchMealDialog(
             Button(
                 onClick = {
                     keyboardController?.hide()
-                    val finalSegments = sections.map { section ->
-                        val totalCals = section.products.sumOf { (it.weightG / 100.0) * it.product.calories }
-                        val totalProt = section.products.sumOf { (it.weightG / 100.0) * it.product.protein }
-                        val totalFat = section.products.sumOf { (it.weightG / 100.0) * it.product.fat }
-                        val totalCarb = section.products.sumOf { (it.weightG / 100.0) * it.product.carbs }
-                        val totalWeightG = section.products.sumOf { it.weightG }
-
-                        val sectionProduct = Product(
-                            id = "sp_${section.id}",
-                            name = section.name.ifBlank { mealName },
-                            calories = if (totalWeightG > 0) (totalCals / totalWeightG) * 100.0 else 0.0,
-                            protein = if (totalWeightG > 0) (totalProt / totalWeightG) * 100.0 else 0.0,
-                            fat = if (totalWeightG > 0) (totalFat / totalWeightG) * 100.0 else 0.0,
-                            carbs = if (totalWeightG > 0) (totalCarb / totalWeightG) * 100.0 else 0.0,
-                            source = "USER"
-                        )
-
-                        BatchMealSegment(
-                            id = section.id,
-                            name = section.name.ifBlank { mealName },
-                            product = sectionProduct,
-                            initialWeightG = totalWeightG,
-                            currentWeightG = totalWeightG
-                        )
-                    }
-                    val newMeal = BatchMeal(
-                        id = "bm_${Clock.uniqueId()}",
+                    
+                    val currentRecipe = Recipe(
+                        id = initialRecipe?.id ?: "r_${Clock.uniqueId()}",
                         name = mealName,
-                        segments = finalSegments
+                        sections = sections.map { section ->
+                            RecipeSection(
+                                id = section.id,
+                                name = section.name,
+                                ingredients = section.products.map { RecipeIngredient(it.product, it.weightG) }
+                            )
+                        }
                     )
-                    onConfirm(newMeal)
+
+                    if (isEditingRecipe) {
+                        onRecipeConfirm(currentRecipe)
+                    } else {
+                        if (saveAsRecipe) {
+                            MockData.recipes.add(currentRecipe)
+                        }
+
+                        val finalSegments = sections.map { section ->
+                            val totalCals = section.products.sumOf { (it.weightG / 100.0) * it.product.calories }
+                            val totalProt = section.products.sumOf { (it.weightG / 100.0) * it.product.protein }
+                            val totalFat = section.products.sumOf { (it.weightG / 100.0) * it.product.fat }
+                            val totalCarb = section.products.sumOf { (it.weightG / 100.0) * it.product.carbs }
+                            val totalWeightG = section.products.sumOf { it.weightG }
+
+                            val sectionProduct = Product(
+                                id = "sp_${section.id}",
+                                name = section.name.ifBlank { mealName },
+                                calories = if (totalWeightG > 0) (totalCals / totalWeightG) * 100.0 else 0.0,
+                                protein = if (totalWeightG > 0) (totalProt / totalWeightG) * 100.0 else 0.0,
+                                fat = if (totalWeightG > 0) (totalFat / totalWeightG) * 100.0 else 0.0,
+                                carbs = if (totalWeightG > 0) (totalCarb / totalWeightG) * 100.0 else 0.0,
+                                source = "USER"
+                            )
+
+                            BatchMealSegment(
+                                id = section.id,
+                                name = section.name.ifBlank { mealName },
+                                product = sectionProduct,
+                                initialWeightG = totalWeightG,
+                                currentWeightG = totalWeightG
+                            )
+                        }
+                        val newMeal = BatchMeal(
+                            id = initialMeal?.id ?: "bm_${Clock.uniqueId()}",
+                            name = mealName,
+                            segments = finalSegments,
+                            recipeId = initialRecipe?.id ?: initialMeal?.recipeId
+                        )
+                        onConfirm(newMeal)
+                    }
                 },
                 modifier = Modifier.fillMaxWidth().padding(horizontal = 24.dp, vertical = 8.dp),
                 shape = RoundedCornerShape(16.dp),
                 enabled = mealName.isNotBlank() && sections.any { it.products.isNotEmpty() }
             ) {
+                val confirmText = when {
+                    isEditingRecipe -> "Zapisz przepis"
+                    initialMeal != null -> "Zapisz zmiany"
+                    else -> "Utwórz patelnię"
+                }
                 Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                    Text("Utwórz patelnię")
+                    Text(confirmText)
                     Text("Łącznie: ${totalWeight.toInt()}g", style = MaterialTheme.typography.labelSmall)
                 }
             }

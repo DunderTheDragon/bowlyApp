@@ -66,7 +66,7 @@ fun ProfileScreen(onMyProductsClick: () -> Unit) {
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Icon(Icons.Default.List, null)
                     Spacer(modifier = Modifier.width(12.dp))
-                    Text("Moje produkty", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
+                    Text("Moje produkty i przepisy", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
                 }
                 Icon(Icons.Default.ChevronRight, null)
             }
