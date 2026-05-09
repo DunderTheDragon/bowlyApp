@@ -20,10 +20,10 @@ import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import com.cantbebetter.bowly.data.MockData
-import com.cantbebetter.bowly.models.ConsumedMeal
-import com.cantbebetter.bowly.models.ConsumedPortion
+import com.cantbebetter.bowly.data.network.ConsumedMealDto
+import com.cantbebetter.bowly.data.network.DailySummaryDto
 import com.cantbebetter.bowly.ui.components.NutritionPanel
+import com.cantbebetter.bowly.ui.viewmodels.MainViewModel
 
 private val ProteinColor = Color(0xFFD81B60)
 private val FatColor = Color(0xFFF57C00)
@@ -31,28 +31,34 @@ private val CarbsColor = Color(0xFF388E3C)
 
 @Composable
 fun DashboardScreen(
+    viewModel: MainViewModel,
     onAddMealClick: (String) -> Unit,
-    onEditMealClick: (ConsumedMeal) -> Unit,
-    onDeleteMealClick: (ConsumedMeal) -> Unit
+    onEditMealClick: (ConsumedMealDto) -> Unit,
+    onDeleteMealClick: (ConsumedMealDto) -> Unit
 ) {
     var currentDayOffset by remember { mutableStateOf(0) }
-    val dayStart = (1715424000000L + (currentDayOffset * 86400000L))
-    val mealNames = MockData.getMealTypesForDate(dayStart)
+    val todayMillis = Clock.getTodayMillis()
+    val dayStart = (todayMillis + (currentDayOffset * 86400000L))
+    val dateString = Clock.formatToApiDate(dayStart)
+    
+    val dailySummary by viewModel.dailySummary.collectAsState()
+    val userProfile by viewModel.userProfile.collectAsState()
+    val dailyStats by remember(userProfile) { 
+        derivedStateOf { userProfile?.let { viewModel.calculateDailyStats(it) } } 
+    }
+    
+    val mealNames = listOf("Śniadanie", "Drugie śniadanie", "Obiad", "Podwieczorek", "Kolacja")
 
-    Scaffold { _ ->
-        val dayEnd = dayStart + 86400000L
+    LaunchedEffect(currentDayOffset) {
+        viewModel.loadDailySummary(dateString)
+    }
 
-        val dayMeals = MockData.consumedMeals.filter { it.timestamp in dayStart until dayEnd }
-        val groupedMeals = dayMeals.groupBy { it.mealType }
-
-        val dayCalories = dayMeals.sumOf { it.totalCalories }
-        val dayProtein = dayMeals.sumOf { it.totalProtein }
-        val dayFat = dayMeals.sumOf { it.totalFat }
-        val dayCarbs = dayMeals.sumOf { it.totalCarbs }
+    Box(modifier = Modifier.fillMaxSize()) {
+        val summary = dailySummary
 
         LazyColumn(
-            modifier = Modifier.fillMaxSize().padding(top = 8.dp),
-            contentPadding = PaddingValues(bottom = 80.dp)
+            modifier = Modifier.fillMaxSize(),
+            contentPadding = PaddingValues(top = 8.dp, bottom = 80.dp)
         ) {
             item {
                 DaySelector(
@@ -63,23 +69,23 @@ fun DashboardScreen(
 
             item {
                 NutritionPanel(
-                    calories = dayCalories,
-                    tCalories = MockData.dailyStats.targetCalories,
-                    protein = dayProtein,
-                    tProtein = MockData.dailyStats.targetProtein,
-                    fat = dayFat,
-                    tFat = MockData.dailyStats.targetFat,
-                    carbs = dayCarbs,
-                    tCarbs = MockData.dailyStats.targetCarbs
+                    calories = summary?.totalCalories ?: 0.0,
+                    tCalories = dailyStats?.targetCalories ?: 0.0,
+                    protein = summary?.totalProtein ?: 0.0,
+                    tProtein = dailyStats?.targetProtein ?: 0.0,
+                    fat = summary?.totalFat ?: 0.0,
+                    tFat = dailyStats?.targetFat ?: 0.0,
+                    carbs = summary?.totalCarbs ?: 0.0,
+                    tCarbs = dailyStats?.targetCarbs ?: 0.0
                 )
             }
 
             mealNames.forEach { mealName ->
-                val meals = groupedMeals[mealName] ?: emptyList()
-                val totalCals = meals.sumOf { it.totalCalories }
-                val totalProtein = meals.sumOf { it.totalProtein }
-                val totalFat = meals.sumOf { it.totalFat }
-                val totalCarbs = meals.sumOf { it.totalCarbs }
+                val meals = summary?.meals?.get(mealName) ?: emptyList()
+                val totalCals = meals.sumOf { it.calories }
+                val totalProtein = meals.sumOf { it.protein }
+                val totalFat = meals.sumOf { it.fat }
+                val totalCarbs = meals.sumOf { it.carbs }
 
                 item {
                     MealHeader(
@@ -152,7 +158,7 @@ fun DaySelector(offset: Int, onOffsetChange: (Int) -> Unit) {
 
 @Composable
 fun MealItem(
-    meal: ConsumedMeal,
+    meal: ConsumedMealDto,
     onEditClick: () -> Unit,
     onDeleteClick: () -> Unit
 ) {
@@ -174,18 +180,13 @@ fun MealItem(
                 horizontalArrangement = Arrangement.SpaceBetween
             ) {
                 Column(modifier = Modifier.weight(1f)) {
-                    Text(meal.name, style = MaterialTheme.typography.bodyLarge, fontWeight = FontWeight.SemiBold)
+                    Text(meal.segmentName, style = MaterialTheme.typography.bodyLarge, fontWeight = FontWeight.SemiBold)
                     Row(verticalAlignment = Alignment.CenterVertically) {
-                        if (meal.isFromBatch) {
-                            Text("Z patelni", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.primary)
-                            Text(" • ", style = MaterialTheme.typography.labelSmall)
-                        }
-                        val totalWeight = meal.portions.sumOf { it.consumedWeightG }
-                        Text("${totalWeight.toInt()}g", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        Text("${meal.weightG.toInt()}g", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                     }
                 }
                 Row(verticalAlignment = Alignment.CenterVertically) {
-                    Text("${meal.totalCalories.toInt()} kcal", style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.Bold)
+                    Text("${meal.calories.toInt()} kcal", style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.Bold)
                     
                     Box {
                         IconButton(onClick = { showMenu = true }) {
@@ -223,20 +224,11 @@ fun MealItem(
             AnimatedVisibility(visible = expanded) {
                 Column(modifier = Modifier.padding(start = 12.dp, end = 12.dp, bottom = 12.dp)) {
                     HorizontalDivider(modifier = Modifier.padding(bottom = 8.dp), thickness = 0.5.dp, color = MaterialTheme.colorScheme.outlineVariant)
-                    meal.portions.forEach { portion ->
-                        Row(
-                            modifier = Modifier.fillMaxWidth().padding(vertical = 2.dp),
-                            horizontalArrangement = Arrangement.SpaceBetween
-                        ) {
-                            Text("${portion.segmentName} (${portion.consumedWeightG.toInt()}g)", style = MaterialTheme.typography.bodySmall, modifier = Modifier.weight(1f))
-                            Text("${portion.calories.toInt()} kcal", style = MaterialTheme.typography.bodySmall, fontWeight = FontWeight.SemiBold)
-                        }
-                    }
-                    Spacer(modifier = Modifier.height(8.dp))
+                    
                     Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                        Text("B: ${meal.totalProtein.toInt()}g", style = MaterialTheme.typography.labelSmall, color = ProteinColor)
-                        Text("T: ${meal.totalFat.toInt()}g", style = MaterialTheme.typography.labelSmall, color = FatColor)
-                        Text("W: ${meal.totalCarbs.toInt()}g", style = MaterialTheme.typography.labelSmall, color = CarbsColor)
+                        Text("B: ${meal.protein.toInt()}g", style = MaterialTheme.typography.labelSmall, color = ProteinColor)
+                        Text("T: ${meal.fat.toInt()}g", style = MaterialTheme.typography.labelSmall, color = FatColor)
+                        Text("W: ${meal.carbs.toInt()}g", style = MaterialTheme.typography.labelSmall, color = CarbsColor)
                     }
                 }
             }
@@ -245,24 +237,22 @@ fun MealItem(
 }
 
 @Composable
-fun MealDetailDialog(meal: ConsumedMeal, onDismiss: () -> Unit, onEdit: () -> Unit) {
+fun MealDetailDialog(meal: ConsumedMealDto, onDismiss: () -> Unit) {
     AlertDialog(
         onDismissRequest = onDismiss,
-        title = { Text(meal.name) },
+        title = { Text(meal.segmentName) },
         text = {
             Column {
-                meal.portions.forEach { portion ->
-                    Text("${portion.segmentName}: ${portion.consumedWeightG.toInt()}g (${portion.calories.toInt()} kcal)", style = MaterialTheme.typography.bodySmall)
-                }
+                Text("Waga: ${meal.weightG.toInt()}g", style = MaterialTheme.typography.bodySmall)
                 Spacer(modifier = Modifier.height(16.dp))
                 Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                    MacroDetail("Białko", meal.totalProtein, ProteinColor)
-                    MacroDetail("Tłuszcze", meal.totalFat, FatColor)
-                    MacroDetail("Węgle", meal.totalCarbs, CarbsColor)
+                    MacroDetail("Białko", meal.protein, ProteinColor)
+                    MacroDetail("Tłuszcze", meal.fat, FatColor)
+                    MacroDetail("Węgle", meal.carbs, CarbsColor)
                 }
                 Spacer(modifier = Modifier.height(16.dp))
                 Text(
-                    "Łącznie: ${meal.totalCalories.toInt()} kcal",
+                    "Łącznie: ${meal.calories.toInt()} kcal",
                     style = MaterialTheme.typography.titleMedium,
                     fontWeight = FontWeight.Bold
                 )
@@ -270,9 +260,6 @@ fun MealDetailDialog(meal: ConsumedMeal, onDismiss: () -> Unit, onEdit: () -> Un
         },
         confirmButton = {
             TextButton(onClick = onDismiss) { Text("Zamknij") }
-        },
-        dismissButton = {
-            TextButton(onClick = onEdit) { Text("Edytuj / Menu") }
         }
     )
 }

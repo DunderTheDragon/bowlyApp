@@ -48,6 +48,11 @@ kotlin {
             implementation(libs.androidx.lifecycle.runtimeCompose)
             implementation(libs.kotlinx.serialization.json)
             implementation(libs.kotlinx.datetime)
+
+            implementation(libs.ktor.client.core)
+            implementation(libs.ktor.client.content.negotiation)
+            implementation(libs.ktor.serialization.kotlinx.json)
+            implementation(libs.multiplatform.settings)
         }
         commonTest.dependencies {
             implementation(libs.kotlin.test)
@@ -56,6 +61,17 @@ kotlin {
 }
 
 android {
+    sourceSets.getByName("main") {
+        dependencies {
+            implementation(libs.compose.uiToolingPreview)
+            implementation(libs.androidx.activity.compose)
+            implementation(libs.barcode.scanning)
+            implementation(libs.camera.view)
+            implementation(libs.camera.lifecycle)
+            implementation(libs.camera.camera2)
+            implementation(libs.ktor.client.okhttp)
+        }
+    }
     namespace = "com.cantbebetter.bowly"
     compileSdk = libs.versions.android.compileSdk.get().toInt()
 

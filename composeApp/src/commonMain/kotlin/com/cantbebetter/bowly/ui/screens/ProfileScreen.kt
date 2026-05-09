@@ -16,16 +16,22 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
-import com.cantbebetter.bowly.data.MockData
-import com.cantbebetter.bowly.models.AllAvailableMealTypes
-import com.cantbebetter.bowly.models.MacroRatios
-import com.cantbebetter.bowly.models.User
+import com.cantbebetter.bowly.data.network.UserDto
+import com.cantbebetter.bowly.ui.viewmodels.MainViewModel
 import kotlin.math.roundToInt
 
 @Composable
-fun ProfileScreen(onMyProductsClick: () -> Unit) {
-    val user = MockData.currentUser
+fun ProfileScreen(
+    viewModel: MainViewModel,
+    onMyProductsClick: () -> Unit,
+    onAdminPanelClick: () -> Unit,
+    onLogoutClick: () -> Unit
+) {
+    val userProfile by viewModel.userProfile.collectAsState()
+    val dailyStats by viewModel.dailyStats.collectAsState()
     val scrollState = rememberScrollState()
+
+    val user = userProfile ?: return // Wait for profile to load
 
     Column(
         modifier = Modifier
@@ -49,9 +55,29 @@ fun ProfileScreen(onMyProductsClick: () -> Unit) {
         }
         Spacer(modifier = Modifier.height(8.dp))
         Text(user.username, style = MaterialTheme.typography.headlineMedium)
-        Text(user.email, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
         
         Spacer(modifier = Modifier.height(24.dp))
+
+        // Admin Panel Button
+        if (user.role == "ADMIN") {
+            Card(
+                modifier = Modifier.fillMaxWidth().padding(bottom = 16.dp).clickable { onAdminPanelClick() },
+                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.primaryContainer)
+            ) {
+                Row(
+                    modifier = Modifier.padding(16.dp).fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Icon(Icons.Default.Settings, null)
+                        Spacer(modifier = Modifier.width(12.dp))
+                        Text("Panel Administratora", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
+                    }
+                    Icon(Icons.Default.ChevronRight, null)
+                }
+            }
+        }
 
         // Moje Produkty Button
         Card(
@@ -88,7 +114,7 @@ fun ProfileScreen(onMyProductsClick: () -> Unit) {
                 }
                 Switch(
                     checked = user.isDarkTheme == true,
-                    onCheckedChange = { MockData.updateCurrentUser(user.copy(isDarkTheme = it)) }
+                    onCheckedChange = { viewModel.updateUserProfile(user.copy(isDarkTheme = it)) }
                 )
             }
         }
@@ -104,14 +130,14 @@ fun ProfileScreen(onMyProductsClick: () -> Unit) {
                 Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(16.dp)) {
                     OutlinedTextField(
                         value = user.weightKg.toString(),
-                        onValueChange = { val v = it.toDoubleOrNull(); if (v != null) MockData.updateCurrentUser(user.copy(weightKg = v)) },
+                        onValueChange = { it.toDoubleOrNull()?.let { v -> viewModel.updateUserProfile(user.copy(weightKg = v)) } },
                         label = { Text("Waga (kg)") },
                         modifier = Modifier.weight(1f),
                         singleLine = true
                     )
                     OutlinedTextField(
                         value = user.targetWeightKg.toString(),
-                        onValueChange = { val v = it.toDoubleOrNull(); if (v != null) MockData.updateCurrentUser(user.copy(targetWeightKg = v)) },
+                        onValueChange = { it.toDoubleOrNull()?.let { v -> viewModel.updateUserProfile(user.copy(targetWeightKg = v)) } },
                         label = { Text("Cel (kg)") },
                         modifier = Modifier.weight(1f),
                         singleLine = true
@@ -123,7 +149,7 @@ fun ProfileScreen(onMyProductsClick: () -> Unit) {
                 Text("Tempo zmiany: ${user.weeklyChangeRateKg} kg / tydzień", style = MaterialTheme.typography.bodyMedium)
                 Slider(
                     value = user.weeklyChangeRateKg.toFloat(),
-                    onValueChange = { MockData.updateCurrentUser(user.copy(weeklyChangeRateKg = (it * 10).roundToInt() / 10.0)) },
+                    onValueChange = { viewModel.updateUserProfile(user.copy(weeklyChangeRateKg = (it * 10).roundToInt() / 10.0)) },
                     valueRange = 0.1f..1.0f,
                     steps = 8
                 )
@@ -136,55 +162,24 @@ fun ProfileScreen(onMyProductsClick: () -> Unit) {
         Card(modifier = Modifier.fillMaxWidth()) {
             Column(modifier = Modifier.padding(16.dp)) {
                 Text("Proporcje Makroskładników", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
-                Text("Suma: ${user.macroRatios.protein + user.macroRatios.fat + user.macroRatios.carbs}%", 
+                val sum = user.proteinRatio + user.fatRatio + user.carbsRatio
+                Text("Suma: $sum%", 
                     style = MaterialTheme.typography.labelSmall, 
-                    color = if (user.macroRatios.protein + user.macroRatios.fat + user.macroRatios.carbs == 100) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.error
+                    color = if (sum == 100) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.error
                 )
                 
                 Spacer(modifier = Modifier.height(16.dp))
                 
-                MacroSlider("Białko", user.macroRatios.protein) { newVal ->
-                    updateMacros(user, newVal, "protein")
+                MacroSlider("Białko", user.proteinRatio) { newVal ->
+                    updateMacros(user, newVal, "protein") { viewModel.updateUserProfile(it) }
                 }
                 
-                MacroSlider("Tłuszcze", user.macroRatios.fat) { newVal ->
-                    updateMacros(user, newVal, "fat")
+                MacroSlider("Tłuszcze", user.fatRatio) { newVal ->
+                    updateMacros(user, newVal, "fat") { viewModel.updateUserProfile(it) }
                 }
                 
-                MacroSlider("Węglowodany", user.macroRatios.carbs) { newVal ->
-                    updateMacros(user, newVal, "carbs")
-                }
-            }
-        }
-
-        Spacer(modifier = Modifier.height(16.dp))
-
-        // Aktywne posiłki
-        Card(modifier = Modifier.fillMaxWidth()) {
-            Column(modifier = Modifier.padding(16.dp)) {
-                Text("Aktywne Posiłki", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
-                Text("Zmiany dotyczą dzisiejszego i przyszłych dni.", style = MaterialTheme.typography.labelSmall)
-                Spacer(modifier = Modifier.height(12.dp))
-                
-                val currentTypes = MockData.getMealTypesForDate(Clock.now())
-                AllAvailableMealTypes.forEach { type ->
-                    Row(
-                        modifier = Modifier.fillMaxWidth().clickable {
-                            val newTypes = if (currentTypes.contains(type)) {
-                                if (currentTypes.size > 1) currentTypes - type else currentTypes
-                            } else {
-                                (currentTypes + type).sortedBy { AllAvailableMealTypes.indexOf(it) }
-                            }
-                            MockData.updateMealTypesFromToday(newTypes)
-                        }.padding(vertical = 4.dp),
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Checkbox(
-                            checked = currentTypes.contains(type),
-                            onCheckedChange = null // Handled by row clickable
-                        )
-                        Text(type, style = MaterialTheme.typography.bodyMedium)
-                    }
+                MacroSlider("Węglowodany", user.carbsRatio) { newVal ->
+                    updateMacros(user, newVal, "carbs") { viewModel.updateUserProfile(it) }
                 }
             }
         }
@@ -199,11 +194,13 @@ fun ProfileScreen(onMyProductsClick: () -> Unit) {
             Column(modifier = Modifier.padding(16.dp)) {
                 Text("Twoje Zapotrzebowanie", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
                 Spacer(modifier = Modifier.height(8.dp))
-                Text("Kalorie: ${MockData.dailyStats.targetCalories.toInt()} kcal", style = MaterialTheme.typography.titleLarge, color = MaterialTheme.colorScheme.primary)
-                Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                    Text("B: ${MockData.dailyStats.targetProtein.toInt()}g")
-                    Text("T: ${MockData.dailyStats.targetFat.toInt()}g")
-                    Text("W: ${MockData.dailyStats.targetCarbs.toInt()}g")
+                dailyStats?.let { stats ->
+                    Text("Kalorie: ${stats.targetCalories.toInt()} kcal", style = MaterialTheme.typography.titleLarge, color = MaterialTheme.colorScheme.primary)
+                    Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                        Text("B: ${stats.targetProtein.toInt()}g")
+                        Text("T: ${stats.targetFat.toInt()}g")
+                        Text("W: ${stats.targetCarbs.toInt()}g")
+                    }
                 }
             }
         }
@@ -211,7 +208,7 @@ fun ProfileScreen(onMyProductsClick: () -> Unit) {
         Spacer(modifier = Modifier.height(32.dp))
         
         TextButton(
-            onClick = { /* Logout */ },
+            onClick = onLogoutClick,
             colors = ButtonDefaults.textButtonColors(contentColor = MaterialTheme.colorScheme.error)
         ) {
             Text("Wyloguj się")
@@ -234,12 +231,11 @@ fun MacroSlider(label: String, value: Int, onValueChange: (Int) -> Unit) {
     }
 }
 
-private fun updateMacros(user: User, newValue: Int, changedField: String) {
-    val current = user.macroRatios
+private fun updateMacros(user: UserDto, newValue: Int, changedField: String, onUpdate: (UserDto) -> Unit) {
     val oldVal = when(changedField) {
-        "protein" -> current.protein
-        "fat" -> current.fat
-        "carbs" -> current.carbs
+        "protein" -> user.proteinRatio
+        "fat" -> user.fatRatio
+        "carbs" -> user.carbsRatio
         else -> 0
     }
     
@@ -247,31 +243,27 @@ private fun updateMacros(user: User, newValue: Int, changedField: String) {
     if (diff == 0) return
 
     val others = mutableListOf<Pair<String, Int>>()
-    if (changedField != "protein") others.add("protein" to current.protein)
-    if (changedField != "fat") others.add("fat" to current.fat)
-    if (changedField != "carbs") others.add("carbs" to current.carbs)
+    if (changedField != "protein") others.add("protein" to user.proteinRatio)
+    if (changedField != "fat") others.add("fat" to user.fatRatio)
+    if (changedField != "carbs") others.add("carbs" to user.carbsRatio)
 
     val sumOthers = others.sumOf { it.second }
     
-    val newMacroRatios = if (sumOthers == 0) {
-        // Jeśli pozostałe są 0, rozdzielamy różnicę po równo
+    val newUser = if (sumOthers == 0) {
         val shared = (100 - newValue) / 2
         val remainder = (100 - newValue) % 2
         when(changedField) {
-            "protein" -> MacroRatios(newValue, shared, shared + remainder)
-            "fat" -> MacroRatios(shared, newValue, shared + remainder)
-            else -> MacroRatios(shared, shared + remainder, newValue)
+            "protein" -> user.copy(proteinRatio = newValue, fatRatio = shared, carbsRatio = shared + remainder)
+            "fat" -> user.copy(proteinRatio = shared, fatRatio = newValue, carbsRatio = shared + remainder)
+            else -> user.copy(proteinRatio = shared, fatRatio = shared + remainder, carbsRatio = newValue)
         }
     } else {
-        // Zachowujemy proporcje
         val factor = (sumOthers - diff).toDouble() / sumOthers
         var newOthers = others.map { it.first to (it.second * factor).roundToInt().coerceAtLeast(0) }.toMap().toMutableMap()
         
-        // Korekta aby suma była 100
         var currentSum = newValue + newOthers.values.sum()
         while (currentSum != 100) {
             val adj = if (currentSum < 100) 1 else -1
-            // Szukamy największego/najmniejszego aby skorygować
             val keyToAdjust = if (adj > 0) {
                 newOthers.maxBy { it.value }.key
             } else {
@@ -282,11 +274,11 @@ private fun updateMacros(user: User, newValue: Int, changedField: String) {
         }
 
         when(changedField) {
-            "protein" -> MacroRatios(newValue, newOthers["fat"]!!, newOthers["carbs"]!!)
-            "fat" -> MacroRatios(newOthers["protein"]!!, newValue, newOthers["carbs"]!!)
-            else -> MacroRatios(newOthers["protein"]!!, newOthers["fat"]!!, newValue)
+            "protein" -> user.copy(proteinRatio = newValue, fatRatio = newOthers["fat"]!!, carbsRatio = newOthers["carbs"]!!)
+            "fat" -> user.copy(proteinRatio = newOthers["protein"]!!, fatRatio = newValue, carbsRatio = newOthers["carbs"]!!)
+            else -> user.copy(proteinRatio = newOthers["protein"]!!, fatRatio = newOthers["fat"]!!, carbsRatio = newValue)
         }
     }
 
-    MockData.updateCurrentUser(user.copy(macroRatios = newMacroRatios))
+    onUpdate(newUser)
 }

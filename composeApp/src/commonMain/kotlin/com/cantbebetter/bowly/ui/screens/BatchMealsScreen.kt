@@ -23,7 +23,6 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.style.TextAlign
@@ -32,9 +31,10 @@ import androidx.compose.ui.unit.sp
 import androidx.compose.ui.zIndex
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
-import com.cantbebetter.bowly.data.MockData
-import com.cantbebetter.bowly.models.*
 import com.cantbebetter.bowly.ui.components.BarcodeScannerView
+
+import com.cantbebetter.bowly.data.network.*
+import com.cantbebetter.bowly.ui.viewmodels.MainViewModel
 
 data class SectionData(
     val id: String,
@@ -43,15 +43,29 @@ data class SectionData(
 )
 
 data class ProductData(
-    val product: Product,
+    val product: ProductDto,
     val weightG: Double
 )
 
 @Composable
-fun BatchMealsScreen() {
-    var selectedMeal by remember { mutableStateOf<BatchMeal?>(null) }
+fun BatchMealsScreen(
+    viewModel: MainViewModel
+) {
+    val activeMeals by viewModel.activeBatchMeals.collectAsState()
+    var selectedMeal by remember { mutableStateOf<BatchMealDto?>(null) }
     var showCreateDialog by remember { mutableStateOf(false) }
-    var showOnboarding by remember { mutableStateOf(MockData.currentUser.showBatchOnboarding) }
+    val userProfile by viewModel.userProfile.collectAsState()
+    var showOnboarding by remember { mutableStateOf(userProfile?.showBatchOnboarding ?: false) }
+
+    // Synchronizacja showOnboarding z profilem
+    LaunchedEffect(userProfile?.showBatchOnboarding) {
+        showOnboarding = userProfile?.showBatchOnboarding ?: false
+    }
+
+    LaunchedEffect(Unit) {
+        viewModel.loadActiveBatchMeals()
+        viewModel.loadUserProfile()
+    }
 
     Scaffold(
         floatingActionButton = {
@@ -78,7 +92,6 @@ fun BatchMealsScreen() {
                 }
             }
             
-            val activeMeals = MockData.batchMeals.filter { !it.isDepleted }
             if (activeMeals.isEmpty()) {
                 item {
                     Box(modifier = Modifier.fillMaxWidth().padding(top = 40.dp), contentAlignment = Alignment.Center) {
@@ -102,7 +115,9 @@ fun BatchMealsScreen() {
                 showOnboarding = false 
             },
             onDontShowAgain = {
-                MockData.updateCurrentUser(MockData.currentUser.copy(showBatchOnboarding = false))
+                userProfile?.let {
+                    viewModel.updateUserProfile(it.copy(showBatchOnboarding = false))
+                }
                 showOnboarding = false
             }
         )
@@ -112,8 +127,12 @@ fun BatchMealsScreen() {
         TakePortionDialog(
             meal = selectedMeal!!,
             onDismiss = { selectedMeal = null },
-            onConfirm = { portions, mealType, timestamp ->
-                handleTakePortions(selectedMeal!!.name, portions, mealType, timestamp)
+            onConfirm = { segmentId, weight, mealType, timestamp ->
+                val date = Clock.formatToApiDate(timestamp)
+                viewModel.consumePortion(
+                    ConsumePortionRequest(segmentId, weight, mealType),
+                    date
+                )
                 selectedMeal = null
             }
         )
@@ -121,9 +140,10 @@ fun BatchMealsScreen() {
 
     if (showCreateDialog) {
         CreateBatchMealDialog(
+            viewModel = viewModel,
             onDismiss = { showCreateDialog = false },
-            onConfirm = { newMeal ->
-                MockData.batchMeals.add(newMeal)
+            onConfirm = { request ->
+                viewModel.createBatchMeal(request)
                 showCreateDialog = false
             }
         )
@@ -192,32 +212,22 @@ fun OnboardingPage(page: Int) {
 
 @Composable
 fun CreateBatchMealDialog(
-    initialMeal: BatchMeal? = null,
-    initialRecipe: Recipe? = null,
-    isEditingRecipe: Boolean = false,
+    initialMeal: BatchMealDto? = null,
+    viewModel: MainViewModel,
     onDismiss: () -> Unit,
-    onConfirm: (BatchMeal) -> Unit,
-    onRecipeConfirm: (Recipe) -> Unit = {}
+    onConfirm: (CreateBatchMealRequest) -> Unit
 ) {
     val keyboardController = androidx.compose.ui.platform.LocalSoftwareKeyboardController.current
-    var mealName by remember { mutableStateOf(initialMeal?.name ?: initialRecipe?.name ?: "") }
+    var mealName by remember { mutableStateOf(initialMeal?.name ?: "") }
     
     val initialSections = remember {
         val list = mutableListOf<SectionData>()
         if (initialMeal != null) {
             initialMeal.segments.forEach { segment ->
                 list.add(SectionData(
-                    id = segment.id,
+                    id = segment.id ?: Clock.uniqueId(),
                     name = segment.name,
                     products = listOf(ProductData(segment.product, segment.initialWeightG))
-                ))
-            }
-        } else if (initialRecipe != null) {
-            initialRecipe.sections.forEach { section ->
-                list.add(SectionData(
-                    id = section.id,
-                    name = section.name,
-                    products = section.ingredients.map { ProductData(it.product, it.weightG) }
                 ))
             }
         } else {
@@ -228,7 +238,6 @@ fun CreateBatchMealDialog(
     
     val sections = remember { mutableStateListOf<SectionData>().apply { addAll(initialSections) } }
     var activeSectionIdForSearch by remember { mutableStateOf<String?>(null) }
-    var saveAsRecipe by remember { mutableStateOf(false) }
 
     val totalWeight = sections.sumOf { it.products.sumOf { p -> p.weightG } }
 
@@ -242,11 +251,7 @@ fun CreateBatchMealDialog(
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 IconButton(onClick = onDismiss) { Icon(Icons.Default.Close, null) }
-                val title = when {
-                    isEditingRecipe -> "Edytuj przepis"
-                    initialMeal != null -> "Edytuj patelnię"
-                    else -> "Nowa patelnia"
-                }
+                val title = if (initialMeal != null) "Edytuj patelnię" else "Nowa patelnia"
                 Text(title, style = MaterialTheme.typography.titleLarge)
             }
         },
@@ -255,7 +260,6 @@ fun CreateBatchMealDialog(
                 modifier = Modifier.fillMaxWidth().padding(horizontal = 4.dp),
                 horizontalAlignment = Alignment.CenterHorizontally
             ) {
-                // Meal Name with Header-on-border style
                 Box(modifier = Modifier.fillMaxWidth().padding(top = 20.dp)) {
                     Column(
                         modifier = Modifier
@@ -348,19 +352,8 @@ fun CreateBatchMealDialog(
                                 )
                             }
                         }
-                        
-                        if (initialRecipe == null && initialMeal == null) {
-                            Row(
-                                modifier = Modifier.fillMaxWidth().padding(horizontal = 8.dp, vertical = 8.dp),
-                                verticalAlignment = Alignment.CenterVertically
-                            ) {
-                                Checkbox(checked = saveAsRecipe, onCheckedChange = { saveAsRecipe = it })
-                                Text("Zapisz jako przepis", style = MaterialTheme.typography.bodyMedium)
-                            }
-                        }
                     }
 
-                    // Meal Name Header
                     Row(
                         modifier = Modifier
                             .align(Alignment.TopCenter)
@@ -412,68 +405,24 @@ fun CreateBatchMealDialog(
                 onClick = {
                     keyboardController?.hide()
                     
-                    val currentRecipe = Recipe(
-                        id = initialRecipe?.id ?: "r_${Clock.uniqueId()}",
+                    val request = CreateBatchMealRequest(
                         name = mealName,
-                        sections = sections.map { section ->
-                            RecipeSection(
-                                id = section.id,
-                                name = section.name,
-                                ingredients = section.products.map { RecipeIngredient(it.product, it.weightG) }
+                        segments = sections.map { section ->
+                            val product = section.products.firstOrNull()?.product
+                            CreateBatchMealSegmentRequest(
+                                name = section.name.ifBlank { mealName },
+                                productId = product?.id ?: "",
+                                initialWeightG = section.products.sumOf { it.weightG }
                             )
                         }
                     )
-
-                    if (isEditingRecipe) {
-                        onRecipeConfirm(currentRecipe)
-                    } else {
-                        if (saveAsRecipe) {
-                            MockData.recipes.add(currentRecipe)
-                        }
-
-                        val finalSegments = sections.map { section ->
-                            val totalCals = section.products.sumOf { (it.weightG / 100.0) * it.product.calories }
-                            val totalProt = section.products.sumOf { (it.weightG / 100.0) * it.product.protein }
-                            val totalFat = section.products.sumOf { (it.weightG / 100.0) * it.product.fat }
-                            val totalCarb = section.products.sumOf { (it.weightG / 100.0) * it.product.carbs }
-                            val totalWeightG = section.products.sumOf { it.weightG }
-
-                            val sectionProduct = Product(
-                                id = "sp_${section.id}",
-                                name = section.name.ifBlank { mealName },
-                                calories = if (totalWeightG > 0) (totalCals / totalWeightG) * 100.0 else 0.0,
-                                protein = if (totalWeightG > 0) (totalProt / totalWeightG) * 100.0 else 0.0,
-                                fat = if (totalWeightG > 0) (totalFat / totalWeightG) * 100.0 else 0.0,
-                                carbs = if (totalWeightG > 0) (totalCarb / totalWeightG) * 100.0 else 0.0,
-                                source = "USER"
-                            )
-
-                            BatchMealSegment(
-                                id = section.id,
-                                name = section.name.ifBlank { mealName },
-                                product = sectionProduct,
-                                initialWeightG = totalWeightG,
-                                currentWeightG = totalWeightG
-                            )
-                        }
-                        val newMeal = BatchMeal(
-                            id = initialMeal?.id ?: "bm_${Clock.uniqueId()}",
-                            name = mealName,
-                            segments = finalSegments,
-                            recipeId = initialRecipe?.id ?: initialMeal?.recipeId
-                        )
-                        onConfirm(newMeal)
-                    }
+                    onConfirm(request)
                 },
                 modifier = Modifier.fillMaxWidth().padding(horizontal = 24.dp, vertical = 8.dp),
                 shape = RoundedCornerShape(16.dp),
                 enabled = mealName.isNotBlank() && sections.any { it.products.isNotEmpty() }
             ) {
-                val confirmText = when {
-                    isEditingRecipe -> "Zapisz przepis"
-                    initialMeal != null -> "Zapisz zmiany"
-                    else -> "Utwórz patelnię"
-                }
+                val confirmText = if (initialMeal != null) "Zapisz zmiany" else "Utwórz patelnię"
                 Column(horizontalAlignment = Alignment.CenterHorizontally) {
                     Text(confirmText)
                     Text("Łącznie: ${totalWeight.toInt()}g", style = MaterialTheme.typography.labelSmall)
@@ -485,6 +434,7 @@ fun CreateBatchMealDialog(
     if (activeSectionIdForSearch != null) {
         val currentActiveId = activeSectionIdForSearch 
         SimpleProductSearchDialog(
+            viewModel = viewModel,
             onDismiss = { activeSectionIdForSearch = null },
             onProductSelected = { product ->
                 val sectionIndex = sections.indexOfFirst { it.id == currentActiveId }
@@ -579,7 +529,6 @@ fun SectionItem(
             }
         }
 
-        // Section Name as Header on the Border
         Row(
             modifier = Modifier
                 .align(Alignment.TopCenter)
@@ -637,19 +586,19 @@ fun SectionItem(
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun TakePortionDialog(
-    meal: BatchMeal,
+    meal: BatchMealDto,
     onDismiss: () -> Unit,
-    onConfirm: (Map<String, Double>, String, Long) -> Unit
+    onConfirm: (String, Double, String, Long) -> Unit
 ) {
     val portions = remember { mutableStateMapOf<String, String>().apply {
-        meal.segments.forEach { put(it.id, "") }
+        meal.segments.forEach { it.id?.let { id -> put(id, "") } }
     }}
     
     var selectedTimestamp by remember { mutableStateOf(Clock.now()) }
     var showDatePicker by remember { mutableStateOf(false) }
     
-    val mealTypes = MockData.getMealTypesForDate(selectedTimestamp)
-    var selectedMealType by remember { mutableStateOf(if (mealTypes.isNotEmpty()) mealTypes[0] else "Inne") }
+    val mealTypes = listOf("Śniadanie", "Obiad", "Kolacja", "Inne")
+    var selectedMealType by remember { mutableStateOf("Obiad") }
     var expandedMealDropdown by remember { mutableStateOf(false) }
 
     val datePickerState = rememberDatePickerState(
@@ -667,7 +616,8 @@ fun TakePortionDialog(
                 Spacer(modifier = Modifier.height(8.dp))
                 
                 meal.segments.forEach { segment ->
-                    val weightStr = portions[segment.id] ?: ""
+                    val segmentId = segment.id ?: return@forEach
+                    val weightStr = portions[segmentId] ?: ""
                     val weight = weightStr.toDoubleOrNull() ?: 0.0
                     val isError = weightStr.isNotBlank() && (weight < 0 || weight > segment.currentWeightG)
                     
@@ -678,7 +628,7 @@ fun TakePortionDialog(
                         }
                         OutlinedTextField(
                             value = weightStr,
-                            onValueChange = { portions[segment.id] = it },
+                            onValueChange = { portions[segmentId] = it },
                             modifier = Modifier.fillMaxWidth(),
                             isError = isError,
                             placeholder = { Text("0") },
@@ -702,7 +652,6 @@ fun TakePortionDialog(
                     Row(modifier = Modifier.padding(12.dp), verticalAlignment = Alignment.CenterVertically) {
                         Icon(Icons.Default.DateRange, null)
                         Spacer(modifier = Modifier.width(8.dp))
-                        val date = Instant(selectedTimestamp) // Simplified for mock
                         Text("Dzień: ${if (selectedTimestamp / 86400000L == Clock.now() / 86400000L) "Dzisiaj" else "Inny"}")
                     }
                 }
@@ -748,8 +697,13 @@ fun TakePortionDialog(
 
             Button(
                 onClick = {
-                    val finalPortions = meal.segments.associate { it.id to (portions[it.id]?.toDoubleOrNull() ?: 0.0) }
-                    onConfirm(finalPortions, selectedMealType, selectedTimestamp)
+                    meal.segments.forEach { segment ->
+                        val segmentId = segment.id ?: return@forEach
+                        val weight = portions[segmentId]?.toDoubleOrNull() ?: 0.0
+                        if (weight > 0) {
+                            onConfirm(segmentId, weight, selectedMealType, selectedTimestamp)
+                        }
+                    }
                 },
                 enabled = !hasError && hasAnyValue
             ) {
@@ -779,46 +733,8 @@ fun TakePortionDialog(
     }
 }
 
-fun handleTakePortions(mealName: String, portionMap: Map<String, Double>, mealType: String, timestamp: Long) {
-    val batchMeal = MockData.batchMeals.find { bm -> bm.segments.any { it.id == portionMap.keys.first() } } ?: return
-    
-    val consumedPortions = mutableListOf<ConsumedPortion>()
-    
-    portionMap.forEach { (segmentId, weight) ->
-        if (weight <= 0) return@forEach
-        val segment = batchMeal.segments.find { it.id == segmentId } ?: return@forEach
-        val consumedWeight = weight.coerceAtMost(segment.currentWeightG)
-        
-        val ratio = consumedWeight / 100.0
-        consumedPortions.add(ConsumedPortion(
-            id = "p_${Clock.uniqueId()}",
-            segmentId = segment.id,
-            segmentName = segment.name,
-            productId = segment.product.id,
-            consumedWeightG = consumedWeight,
-            calories = segment.product.calories * ratio,
-            protein = segment.product.protein * ratio,
-            fat = segment.product.fat * ratio,
-            carbs = segment.product.carbs * ratio,
-        ))
-    }
-
-    if (consumedPortions.isEmpty()) return
-
-    val consumedMeal = com.cantbebetter.bowly.models.ConsumedMeal(
-        id = "m_${Clock.uniqueId()}",
-        userId = MockData.currentUser.id,
-        name = mealName,
-        mealType = mealType,
-        portions = consumedPortions,
-        timestamp = timestamp,
-        isFromBatch = true
-    )
-    MockData.upsertConsumedMeal(consumedMeal)
-}
-
 @Composable
-fun MealCard(meal: BatchMeal, onTakePortion: () -> Unit) {
+fun MealCard(meal: BatchMealDto, onTakePortion: () -> Unit) {
     Card(modifier = Modifier.fillMaxWidth()) {
         Column(modifier = Modifier.padding(16.dp)) {
             Text(meal.name, style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold)
@@ -854,30 +770,28 @@ fun MealCard(meal: BatchMeal, onTakePortion: () -> Unit) {
 
 @Composable
 fun SimpleProductSearchDialog(
+    viewModel: MainViewModel,
     onDismiss: () -> Unit,
-    onProductSelected: (Product) -> Unit
+    onProductSelected: (ProductDto) -> Unit
 ) {
     var query by remember { mutableStateOf("") }
     var showAddDialog by remember { mutableStateOf(false) }
     var barcodeToPreFill by remember { mutableStateOf<String?>(null) }
     var showScanner by remember { mutableStateOf(false) }
 
-    val filteredProducts = remember(query) {
-        if (query.isEmpty()) MockData.products
-        else MockData.products.filter { 
-            it.name.contains(query, ignoreCase = true) || it.barcode == query 
-        }
+    val filteredProducts by viewModel.searchResults.collectAsState()
+
+    LaunchedEffect(query) {
+        viewModel.searchProducts(query)
     }
 
     if (showAddDialog) {
         AddProductDialog(
-            preFilledBarcode = barcodeToPreFill,
             onDismiss = { 
                 showAddDialog = false
                 barcodeToPreFill = null
             },
             onConfirm = { newProduct ->
-                MockData.products.add(newProduct)
                 onProductSelected(newProduct)
                 showAddDialog = false
             }
@@ -888,15 +802,9 @@ fun SimpleProductSearchDialog(
         Dialog(onDismissRequest = { showScanner = false }, properties = DialogProperties(usePlatformDefaultWidth = false)) {
             BarcodeScannerView(
                 onBarcodeDetected = { code ->
-                    val found = MockData.products.find { it.barcode == code }
-                    if (found != null) {
-                        onProductSelected(found)
-                        showScanner = false
-                    } else {
-                        barcodeToPreFill = code
-                        showAddDialog = true
-                        showScanner = false
-                    }
+                    // For now, just search with barcode in query
+                    query = code
+                    showScanner = false
                 },
                 onClose = { showScanner = false }
             )
@@ -940,7 +848,7 @@ fun SimpleProductSearchDialog(
                             ListItem(
                                 headlineContent = { Text(product.name) },
                                 supportingContent = { 
-                                    Text("${product.calories.toInt()} kcal/100g | B: ${product.protein} T: ${product.fat} W: ${product.carbs}") 
+                                    Text("${product.calories.toInt()} kcal/100g | B: ${product.protein} T: ${product.fat} W: ${product.carbohydrates}")
                                 },
                                 modifier = Modifier.clickable { onProductSelected(product) }
                             )
@@ -968,26 +876,14 @@ fun SimpleProductSearchDialog(
 
 @Composable
 fun AddProductDialog(
-    preFilledBarcode: String? = null,
     onDismiss: () -> Unit,
-    onConfirm: (Product) -> Unit
+    onConfirm: (ProductDto) -> Unit
 ) {
     var name by remember { mutableStateOf("") }
-    var barcode by remember { mutableStateOf(preFilledBarcode ?: "") }
     var calories by remember { mutableStateOf("") }
     var protein by remember { mutableStateOf("") }
     var fat by remember { mutableStateOf("") }
     var carbs by remember { mutableStateOf("") }
-    
-    var unitName by remember { mutableStateOf("sztuka") }
-    var unitWeightG by remember { mutableStateOf("") }
-    
-    var fiber by remember { mutableStateOf("") }
-    var sugar by remember { mutableStateOf("") }
-    var salt by remember { mutableStateOf("") }
-    var saturatedFat by remember { mutableStateOf("") }
-    
-    var showAdvanced by remember { mutableStateOf(false) }
 
     AlertDialog(
         onDismissRequest = onDismiss,
@@ -997,11 +893,9 @@ fun AddProductDialog(
         text = {
             Column(modifier = Modifier.verticalScroll(rememberScrollState()).padding(horizontal = 4.dp)) {
                 OutlinedTextField(value = name, onValueChange = { name = it }, label = { Text("Nazwa produktu") }, modifier = Modifier.fillMaxWidth())
-                OutlinedTextField(value = barcode, onValueChange = { barcode = it }, label = { Text("Kod kreskowy (opcjonalnie)") }, modifier = Modifier.fillMaxWidth())
                 
                 Spacer(modifier = Modifier.height(16.dp))
                 
-                // Makroskładniki w ramce
                 Box(modifier = Modifier.fillMaxWidth().padding(top = 8.dp)) {
                     Surface(
                         modifier = Modifier
@@ -1034,104 +928,20 @@ fun AddProductDialog(
                         }
                     }
                 }
-
-                Spacer(modifier = Modifier.height(16.dp))
-                Text("Domyślna jednostka:", style = MaterialTheme.typography.labelMedium)
-                Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
-                    OutlinedTextField(value = unitName, onValueChange = { unitName = it }, label = { Text("Nazwa (np. sztuka)") }, modifier = Modifier.weight(1.5f))
-                    OutlinedTextField(value = unitWeightG, onValueChange = { unitWeightG = it }, label = { Text("Waga (g)") }, modifier = Modifier.weight(1f), keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number))
-                }
-
-                Spacer(modifier = Modifier.height(8.dp))
-                TextButton(onClick = { showAdvanced = !showAdvanced }) {
-                    Text(if (showAdvanced) "Ukryj opcje zaawansowane" else "Pokaż opcje zaawansowane (mikroelementy)")
-                    Icon(if (showAdvanced) Icons.Default.ExpandLess else Icons.Default.ExpandMore, null)
-                }
-
-                if (showAdvanced) {
-                    Box(modifier = Modifier.fillMaxWidth().padding(top = 16.dp)) {
-                        Surface(
-                            modifier = Modifier
-                                .offset(x = 12.dp, y = (-10).dp)
-                                .zIndex(1f),
-                            color = MaterialTheme.colorScheme.surface
-                        ) {
-                            Text(
-                                " mikro / 100g ",
-                                style = MaterialTheme.typography.labelSmall,
-                                color = MaterialTheme.colorScheme.primary,
-                                modifier = Modifier.padding(horizontal = 4.dp)
-                            )
-                        }
-                        
-                        Column(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .border(1.dp, MaterialTheme.colorScheme.outline, RoundedCornerShape(4.dp))
-                                .padding(12.dp),
-                            verticalArrangement = Arrangement.spacedBy(8.dp)
-                        ) {
-                            Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                                OutlinedTextField(
-                                    value = fiber, 
-                                    onValueChange = { fiber = it }, 
-                                    label = { Text("Błonnik") }, 
-                                    placeholder = { Text("brak", style = MaterialTheme.typography.bodySmall.copy(color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.5f))) },
-                                    modifier = Modifier.weight(1f), 
-                                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number)
-                                )
-                                OutlinedTextField(
-                                    value = sugar, 
-                                    onValueChange = { sugar = it }, 
-                                    label = { Text("Cukry") }, 
-                                    placeholder = { Text("brak", style = MaterialTheme.typography.bodySmall.copy(color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.5f))) },
-                                    modifier = Modifier.weight(1f), 
-                                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number)
-                                )
-                            }
-                            Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                                OutlinedTextField(
-                                    value = salt, 
-                                    onValueChange = { salt = it }, 
-                                    label = { Text("Sól") }, 
-                                    placeholder = { Text("brak", style = MaterialTheme.typography.bodySmall.copy(color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.5f))) },
-                                    modifier = Modifier.weight(1f), 
-                                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number)
-                                )
-                                OutlinedTextField(
-                                    value = saturatedFat, 
-                                    onValueChange = { saturatedFat = it }, 
-                                    label = { Text("Nasycone") },
-                                    placeholder = { Text("brak", style = MaterialTheme.typography.bodySmall.copy(color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.5f))) },
-                                    modifier = Modifier.weight(1f), 
-                                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number)
-                                )
-                            }
-                        }
-                    }
-                }
             }
         },
         confirmButton = {
             val macroComplete = calories.isNotBlank() && protein.isNotBlank() && fat.isNotBlank() && carbs.isNotBlank()
             Button(
                 onClick = {
-                    val product = Product(
-                        id = "user_p_${Clock.uniqueId()}",
+                    val product = ProductDto(
+                        id = null,
                         name = name,
                         calories = calories.toDoubleOrNull() ?: 0.0,
                         protein = protein.toDoubleOrNull() ?: 0.0,
                         fat = fat.toDoubleOrNull() ?: 0.0,
-                        carbs = carbs.toDoubleOrNull() ?: 0.0,
-                        barcode = barcode.ifBlank { null },
-                        unitName = unitName,
-                        unitWeightG = unitWeightG.toDoubleOrNull() ?: 100.0,
-                        micros = MicroElements(
-                            fiber = if (fiber.isBlank()) null else fiber.toDoubleOrNull(),
-                            sugar = if (sugar.isBlank()) null else sugar.toDoubleOrNull(),
-                            salt = if (salt.isBlank()) null else salt.toDoubleOrNull(),
-                            saturatedFat = if (saturatedFat.isBlank()) null else saturatedFat.toDoubleOrNull()
-                        ),
+                        carbohydrates = carbs.toDoubleOrNull() ?: 0.0,
+                        barcode = null,
                         source = "USER"
                     )
                     onConfirm(product)
