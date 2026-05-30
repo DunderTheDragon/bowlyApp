@@ -1,6 +1,8 @@
 package com.cantbebetter.bowly.ui.auth
 
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -8,28 +10,33 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
 import com.cantbebetter.bowly.data.network.LoginRequest
-import com.cantbebetter.bowly.data.network.SetupRequest
+import com.cantbebetter.bowly.data.network.RegisterRequest
+import com.cantbebetter.bowly.ui.viewmodels.MainViewModel
 
 @Composable
 fun ServerAddressScreen(
     error: String? = null,
     onSetAddress: (String) -> Unit
 ) {
-    var url by remember { mutableStateOf("http://10.0.2.2:8080") }
+    var url by remember { mutableStateOf("") }
 
     Column(
         modifier = Modifier.fillMaxSize().padding(16.dp),
         horizontalAlignment = Alignment.CenterHorizontally,
         verticalArrangement = Arrangement.Center
     ) {
-        Text("Podaj adres serwera domowego", style = MaterialTheme.typography.headlineSmall)
+        Text("Połącz z serwerem Bowly", style = MaterialTheme.typography.headlineSmall)
+        Spacer(modifier = Modifier.height(8.dp))
+        Text("Wprowadź adres IP (np. 192.168.1.10:8080)", style = MaterialTheme.typography.bodySmall)
         Spacer(modifier = Modifier.height(16.dp))
         OutlinedTextField(
             value = url,
             onValueChange = { url = it },
-            label = { Text("Adres serwera (np. http://10.0.2.2:8080)") },
+            label = { Text("Adres serwera") },
+            placeholder = { Text("http://") },
             modifier = Modifier.fillMaxWidth(),
-            isError = error != null
+            isError = error != null,
+            singleLine = true
         )
         if (error != null) {
             Text(
@@ -47,73 +54,47 @@ fun ServerAddressScreen(
 }
 
 @Composable
-fun SetupAdminScreen(
+fun LoginScreen(
+    viewModel: MainViewModel,
     error: String? = null,
-    onSetup: (SetupRequest) -> Unit
+    onLogin: (LoginRequest) -> Unit,
+    onRegister: (RegisterRequest) -> Unit,
+    onChangeServer: () -> Unit
 ) {
+    var isRegisterMode by remember { mutableStateOf(false) }
+    
     var username by remember { mutableStateOf("") }
     var password by remember { mutableStateOf("") }
+    var confirmPassword by remember { mutableStateOf("") }
+    var registrationSecret by remember { mutableStateOf("") }
 
-    Column(
-        modifier = Modifier.fillMaxSize().padding(16.dp),
-        horizontalAlignment = Alignment.CenterHorizontally,
-        verticalArrangement = Arrangement.Center
-    ) {
-        Text("Konfiguracja pierwszego administratora", style = MaterialTheme.typography.headlineSmall)
-        Spacer(modifier = Modifier.height(16.dp))
-        OutlinedTextField(
-            value = username,
-            onValueChange = { username = it },
-            label = { Text("Nazwa użytkownika") },
-            modifier = Modifier.fillMaxWidth(),
-            isError = error != null
-        )
-        Spacer(modifier = Modifier.height(8.dp))
-        OutlinedTextField(
-            value = password,
-            onValueChange = { password = it },
-            label = { Text("Hasło") },
-            visualTransformation = PasswordVisualTransformation(),
-            modifier = Modifier.fillMaxWidth(),
-            isError = error != null
-        )
-        if (error != null) {
-            Text(
-                text = error,
-                color = MaterialTheme.colorScheme.error,
-                style = MaterialTheme.typography.bodySmall,
-                modifier = Modifier.padding(top = 8.dp)
-            )
-        }
-        Spacer(modifier = Modifier.height(16.dp))
-        Button(onClick = { onSetup(SetupRequest(username, password)) }) {
-            Text("Utwórz konto administratora")
+    val scrollState = rememberScrollState()
+    val registrationSuccess by viewModel.registrationSuccess.collectAsState()
+
+    LaunchedEffect(registrationSuccess) {
+        if (registrationSuccess) {
+            isRegisterMode = false
+            viewModel.registrationSuccessHandled()
         }
     }
-}
-
-@Composable
-fun LoginScreen(
-    error: String? = null,
-    onLogin: (LoginRequest) -> Unit
-) {
-    var username by remember { mutableStateOf("") }
-    var password by remember { mutableStateOf("") }
 
     Column(
-        modifier = Modifier.fillMaxSize().padding(16.dp),
+        modifier = Modifier.fillMaxSize().padding(16.dp).verticalScroll(scrollState),
         horizontalAlignment = Alignment.CenterHorizontally,
         verticalArrangement = Arrangement.Center
     ) {
-        Text("Logowanie", style = MaterialTheme.typography.headlineSmall)
+        Text(if (isRegisterMode) "Rejestracja" else "Logowanie", style = MaterialTheme.typography.headlineSmall)
         Spacer(modifier = Modifier.height(16.dp))
+        
         OutlinedTextField(
             value = username,
             onValueChange = { username = it },
             label = { Text("Login") },
             modifier = Modifier.fillMaxWidth(),
-            isError = error != null
+            isError = error != null,
+            singleLine = true
         )
+        
         Spacer(modifier = Modifier.height(8.dp))
         OutlinedTextField(
             value = password,
@@ -121,8 +102,33 @@ fun LoginScreen(
             label = { Text("Hasło") },
             visualTransformation = PasswordVisualTransformation(),
             modifier = Modifier.fillMaxWidth(),
-            isError = error != null
+            isError = error != null,
+            singleLine = true
         )
+
+        if (isRegisterMode) {
+            Spacer(modifier = Modifier.height(8.dp))
+            OutlinedTextField(
+                value = confirmPassword,
+                onValueChange = { confirmPassword = it },
+                label = { Text("Powtórz hasło") },
+                visualTransformation = PasswordVisualTransformation(),
+                modifier = Modifier.fillMaxWidth(),
+                isError = confirmPassword.isNotEmpty() && confirmPassword != password,
+                singleLine = true
+            )
+            
+            Spacer(modifier = Modifier.height(8.dp))
+            OutlinedTextField(
+                value = registrationSecret,
+                onValueChange = { registrationSecret = it },
+                label = { Text("Hasło backendu") },
+                visualTransformation = PasswordVisualTransformation(),
+                modifier = Modifier.fillMaxWidth(),
+                singleLine = true
+            )
+        }
+
         if (error != null) {
             Text(
                 text = error,
@@ -131,9 +137,33 @@ fun LoginScreen(
                 modifier = Modifier.padding(top = 8.dp)
             )
         }
+        
         Spacer(modifier = Modifier.height(16.dp))
-        Button(onClick = { onLogin(LoginRequest(username, password)) }) {
-            Text("Zaloguj")
+        
+        Button(
+            onClick = { 
+                if (isRegisterMode) {
+                    onRegister(RegisterRequest(username, password, registrationSecret))
+                } else {
+                    onLogin(LoginRequest(username, password))
+                }
+            },
+            modifier = Modifier.fillMaxWidth(),
+            enabled = if (isRegisterMode) {
+                username.isNotBlank() && password.isNotBlank() && password == confirmPassword && registrationSecret.isNotBlank()
+            } else {
+                username.isNotBlank() && password.isNotBlank()
+            }
+        ) {
+            Text(if (isRegisterMode) "Zarejestruj się" else "Zaloguj")
+        }
+
+        TextButton(onClick = { isRegisterMode = !isRegisterMode }) {
+            Text(if (isRegisterMode) "Masz już konto? Zaloguj się" else "Nie masz konta? Zarejestruj się")
+        }
+
+        TextButton(onClick = onChangeServer) {
+            Text("Zmień adres serwera")
         }
     }
 }

@@ -1,20 +1,25 @@
 package com.cantbebetter.bowly.ui.screens
 
-import androidx.compose.foundation.background
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.ArrowBack
+import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Check
+import androidx.compose.material.icons.filled.DateRange
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.QrCodeScanner
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
@@ -31,7 +36,8 @@ import com.cantbebetter.bowly.ui.viewmodels.MainViewModel
 fun AddMealSelectionScreen(
     viewModel: MainViewModel,
     mealName: String,
-    initialMeal: ConsumedMealDto? = null,
+    date: String,
+    initialMeal: ConsumedPortionDto? = null,
     onBack: () -> Unit,
     onConfirm: () -> Unit
 ) {
@@ -41,6 +47,14 @@ fun AddMealSelectionScreen(
     var selectedRecipe by remember { mutableStateOf<RecipeDto?>(null) }
 
     val activeBatchMeals by viewModel.activeBatchMeals.collectAsState()
+    val scannedProduct by viewModel.scannedProduct.collectAsState()
+
+    LaunchedEffect(scannedProduct) {
+        scannedProduct?.let {
+            selectedProduct = it
+            viewModel.scannedProductHandled()
+        }
+    }
 
     // Inicjalizacja przy edycji
     LaunchedEffect(initialMeal, activeBatchMeals) {
@@ -55,11 +69,11 @@ fun AddMealSelectionScreen(
                 // Rekonstrukcja produktu dla edycji zwykłego produktu
                 selectedProduct = ProductDto(
                     id = null, // Backend rozpozna po ID wpisu w diary
-                    name = initialMeal.segmentName,
-                    calories = (initialMeal.calories / initialMeal.weightG) * 100.0,
-                    protein = (initialMeal.protein / initialMeal.weightG) * 100.0,
-                    fat = (initialMeal.fat / initialMeal.weightG) * 100.0,
-                    carbohydrates = (initialMeal.carbs / initialMeal.weightG) * 100.0
+                    name = initialMeal.productName ?: initialMeal.segmentName ?: "Nieznany produkt",
+                    calories = (initialMeal.kcal / initialMeal.consumedWeightG) * 100.0,
+                    protein = (initialMeal.protein / initialMeal.consumedWeightG) * 100.0,
+                    fat = (initialMeal.fat / initialMeal.consumedWeightG) * 100.0,
+                    carbohydrates = (initialMeal.carbs / initialMeal.consumedWeightG) * 100.0
                 )
             }
         }
@@ -70,6 +84,7 @@ fun AddMealSelectionScreen(
             viewModel = viewModel,
             product = selectedProduct!!,
             mealType = mealName,
+            date = date,
             initialPortion = initialMeal,
             onBack = { 
                 if (initialMeal != null) onBack() else selectedProduct = null 
@@ -82,7 +97,9 @@ fun AddMealSelectionScreen(
         BatchMealAddDetail(
             viewModel = viewModel,
             batchMeal = selectedBatchMeal!!,
-            mealType = mealName,
+            initialMealType = mealName,
+            initialDate = date,
+            isPredefined = true,
             initialPortions = if (initialMeal != null) listOf(initialMeal) else emptyList(),
             onBack = { 
                 if (initialMeal != null) onBack() else selectedBatchMeal = null 
@@ -92,15 +109,31 @@ fun AddMealSelectionScreen(
             }
         )
     } else if (selectedRecipe != null) {
-        RecipeAddDetail(
+        BatchMealAddDetail(
             viewModel = viewModel,
-            recipe = selectedRecipe!!,
-            mealType = mealName,
+            batchMeal = selectedRecipe!!.toVirtualBatchMeal(),
+            sourceRecipe = selectedRecipe,
+            initialMealType = mealName,
+            initialDate = date,
+            isPredefined = true,
             onBack = { selectedRecipe = null },
             onConfirm = { onConfirm() }
         )
     } else {
-        Column(modifier = Modifier.fillMaxSize()) {
+        Column(modifier = Modifier.fillMaxSize().statusBarsPadding()) {
+            Row(
+                modifier = Modifier.fillMaxWidth().padding(horizontal = 4.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                IconButton(onClick = onBack) {
+                    Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Wstecz")
+                }
+                Text(
+                    text = "Dodaj do: $mealName",
+                    style = MaterialTheme.typography.titleMedium,
+                    modifier = Modifier.padding(start = 8.dp)
+                )
+            }
             TabRow(selectedTabIndex = selectedTab) {
                 Tab(selected = selectedTab == 0, onClick = { selectedTab = 0 }) {
                     Text("Produkty", modifier = Modifier.padding(16.dp))
@@ -116,7 +149,11 @@ fun AddMealSelectionScreen(
             when (selectedTab) {
                 0 -> ProductSearchList(
                     viewModel = viewModel,
-                    onProductSelected = { selectedProduct = it }
+                    onProductSelected = { product ->
+                        viewModel.cacheProduct(product) { saved ->
+                            selectedProduct = saved
+                        }
+                    }
                 )
                 1 -> BatchMealList(
                     viewModel = viewModel,
@@ -140,7 +177,7 @@ fun RecipeSearchList(
     val searchResults by viewModel.recipeSearchResults.collectAsState()
 
     LaunchedEffect(query) {
-        viewModel.searchRecipes(query)
+        viewModel.searchRecipes(query, scope = "MINE")
     }
 
     Column {
@@ -150,95 +187,32 @@ fun RecipeSearchList(
             modifier = Modifier.fillMaxWidth().padding(16.dp),
             placeholder = { Text("Szukaj przepisu...") },
             leadingIcon = { Icon(Icons.Default.Search, contentDescription = null) },
-            singleLine = true
+            singleLine = true,
+            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Text)
         )
+        if (searchResults.isEmpty()) {
+            Text(
+                "Brak przepisów. Dodaj je w profilu → Moje produkty i przepisy.",
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.padding(16.dp)
+            )
+        }
         LazyColumn {
             items(searchResults) { recipe ->
                 ListItem(
                     headlineContent = { Text(recipe.name) },
-                    supportingContent = { Text("${recipe.sections.sumOf { it.ingredients.size }} składników") },
+                    supportingContent = {
+                        Text("${recipe.sections.size} sekcji · ${recipe.sections.sumOf { it.ingredients.size }} składników")
+                    },
+                    trailingContent = {
+                        IconButton(onClick = { onRecipeSelected(recipe) }) {
+                            Icon(Icons.Default.Add, contentDescription = "Dodaj przepis do posiłku")
+                        }
+                    },
                     modifier = Modifier.clickable { onRecipeSelected(recipe) }
                 )
             }
-        }
-    }
-}
-
-@Composable
-fun RecipeAddDetail(
-    viewModel: MainViewModel,
-    recipe: RecipeDto,
-    mealType: String,
-    onBack: () -> Unit,
-    onConfirm: () -> Unit
-) {
-    var totalAmountText by remember { mutableStateOf("100") }
-    val totalWeightG = recipe.sections.sumOf { it.ingredients.sumOf { ing -> ing.amount } }
-    
-    val currentTotalAmount = totalAmountText.toDoubleOrNull() ?: 0.0
-    val ratio = if (totalWeightG > 0) currentTotalAmount / totalWeightG else 0.0
-
-    val calculatedCals = recipe.sections.sumOf { it.ingredients.sumOf { ing -> (ing.amount * ratio / 100.0) * ing.product.calories } }
-    val calculatedProtein = recipe.sections.sumOf { it.ingredients.sumOf { ing -> (ing.amount * ratio / 100.0) * ing.product.protein } }
-    val calculatedFat = recipe.sections.sumOf { it.ingredients.sumOf { ing -> (ing.amount * ratio / 100.0) * ing.product.fat } }
-    val calculatedCarbs = recipe.sections.sumOf { it.ingredients.sumOf { ing -> (ing.amount * ratio / 100.0) * ing.product.carbohydrates } }
-
-    Column(modifier = Modifier.fillMaxSize().padding(16.dp)) {
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            IconButton(onClick = onBack) { Icon(Icons.Default.ArrowBack, null) }
-            Text(recipe.name, style = MaterialTheme.typography.titleLarge)
-        }
-
-        Spacer(modifier = Modifier.height(24.dp))
-        Text("Wybierz wagę gotowego dania:", style = MaterialTheme.typography.titleMedium)
-        
-        OutlinedTextField(
-            value = totalAmountText,
-            onValueChange = { totalAmountText = it },
-            modifier = Modifier.fillMaxWidth().padding(vertical = 16.dp),
-            label = { Text("Waga (g)") },
-            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
-            singleLine = true
-        )
-
-        Spacer(modifier = Modifier.weight(1f))
-
-        Card(modifier = Modifier.fillMaxWidth(), colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f))) {
-            Column(modifier = Modifier.padding(16.dp)) {
-                Text("Podsumowanie porcji", fontWeight = FontWeight.Bold)
-                Spacer(modifier = Modifier.height(8.dp))
-                Text("${calculatedCals.toInt()} kcal")
-                Text("B: ${calculatedProtein.toInt()}g | T: ${calculatedFat.toInt()}g | W: ${calculatedCarbs.toInt()}g")
-            }
-        }
-
-        Button(
-            onClick = {
-                // Dodajemy przepis jako "produkt" o skumulowanych makrach
-                val request = ConsumeProductRequest(
-                    productId = "RECIPE:${recipe.id}", // Specjalny prefiks dla backendu lub marker
-                    weightG = currentTotalAmount,
-                    mealType = mealType.uppercase()
-                )
-                // Tu w realnej aplikacji backend musiałby to obsłużyć. 
-                // Alternatywnie: dodajemy każdy składnik osobno.
-                // Dla uproszczenia tutaj przyjmujemy, że robimy "Virtual Product"
-                
-                // UWAGA: Ponieważ API consumeProduct oczekuje realnego productId, 
-                // a my nie mamy "produktu" z przepisu, w tej wersji po prostu 
-                // przeliczymy to na wirtualny produkt lub wyślemy serię składników.
-                // Na potrzeby tego zadania załóżmy, że tworzymy produkt tymczasowy 
-                // lub backend obsługuje RECIPE:id.
-                
-                viewModel.consumeProduct(request, Clock.formatToApiDate(Clock.now()))
-                onConfirm()
-            },
-            modifier = Modifier.fillMaxWidth().padding(vertical = 16.dp),
-            enabled = currentTotalAmount > 0
-        ) {
-            Icon(Icons.Default.Check, null)
-            Spacer(modifier = Modifier.width(8.dp))
-            Text("Dodaj do dziennika")
         }
     }
 }
@@ -251,18 +225,30 @@ fun ProductSearchList(
     var query by remember { mutableStateOf("") }
     var showScanner by remember { mutableStateOf(false) }
     var showAddDialog by remember { mutableStateOf(false) }
-    var barcodeToPreFill by remember { mutableStateOf<String?>(null) }
+    
+    val barcodeToPrefill by viewModel.barcodeToPrefill.collectAsState()
+    val displayProducts by viewModel.displaySearchResults.collectAsState()
+    val error by viewModel.error.collectAsState()
 
-    val searchResults by viewModel.searchResults.collectAsState()
+    LaunchedEffect(Unit) {
+        viewModel.loadLocalProducts()
+    }
 
     LaunchedEffect(query) {
-        viewModel.searchProducts(query)
+        viewModel.onProductSearchQueryChanged(query)
+    }
+
+    LaunchedEffect(barcodeToPrefill) {
+        if (barcodeToPrefill != null) {
+            showAddDialog = true
+        }
     }
 
     if (showScanner) {
         Dialog(onDismissRequest = { showScanner = false }, properties = DialogProperties(usePlatformDefaultWidth = false)) {
             BarcodeScannerView(
                 onBarcodeDetected = { code ->
+                    viewModel.searchProductByBarcode(code)
                     query = code
                     showScanner = false
                 },
@@ -273,14 +259,16 @@ fun ProductSearchList(
 
     if (showAddDialog) {
         AddProductDialog(
+            barcodeToPreFill = barcodeToPrefill,
             onDismiss = { 
                 showAddDialog = false
-                barcodeToPreFill = null
+                viewModel.barcodeHandled()
             },
             onConfirm = { newProduct ->
-                viewModel.addLocalProduct(newProduct)
+                viewModel.saveLocalProduct(newProduct)
                 onProductSelected(newProduct)
                 showAddDialog = false
+                viewModel.barcodeHandled()
             }
         )
     }
@@ -297,17 +285,45 @@ fun ProductSearchList(
                     Icon(Icons.Default.QrCodeScanner, "Skanuj", tint = MaterialTheme.colorScheme.primary)
                 }
             },
-            singleLine = true
+            singleLine = true,
+            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Text)
         )
+        if (error != null) {
+            Text(
+                text = "Błąd: $error",
+                color = MaterialTheme.colorScheme.error,
+                modifier = Modifier.padding(16.dp)
+            )
+        }
         LazyColumn {
-            items(searchResults) { product ->
+            items(displayProducts) { product ->
                 ListItem(
                     headlineContent = { Text(product.name) },
                     supportingContent = { 
                         Text("${product.calories.toInt()} kcal/100g | B: ${product.protein} T: ${product.fat} W: ${product.carbohydrates}") 
                     },
-                    modifier = Modifier.clickable { onProductSelected(product) }
+                    trailingContent = {
+                        if (product.source == "LOCAL" || product.source == "USER") {
+                            Badge { Text("WŁASNY") }
+                        }
+                    },
+                    modifier = Modifier.clickable {
+                        viewModel.cacheProduct(product) { saved ->
+                            onProductSelected(saved)
+                        }
+                    }
                 )
+            }
+            item {
+                HorizontalDivider(modifier = Modifier.padding(vertical = 8.dp))
+                TextButton(
+                    onClick = { showAddDialog = true },
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Icon(Icons.Default.Add, null)
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Text("Nie możesz znaleźć produktu? Dodaj go ręcznie")
+                }
             }
         }
     }
@@ -324,13 +340,34 @@ fun BatchMealList(
         viewModel.loadActiveBatchMeals()
     }
 
-    LazyColumn {
+    LazyColumn(
+        contentPadding = PaddingValues(vertical = 8.dp),
+        verticalArrangement = Arrangement.spacedBy(12.dp)
+    ) {
         items(activeBatchMeals) { batch ->
-            ListItem(
-                headlineContent = { Text(batch.name) },
-                supportingContent = { Text("${batch.segments.size} składników") },
-                modifier = Modifier.clickable { onBatchSelected(batch) }
-            )
+            Card(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clickable { onBatchSelected(batch) }
+            ) {
+                Column(modifier = Modifier.padding(12.dp)) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween
+                    ) {
+                        Text(batch.name, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
+                        Text(
+                            "${batch.totalCurrentWeightG().toInt()}g · ${batch.totalRemainingKcal().toInt()} kcal",
+                            style = MaterialTheme.typography.labelMedium,
+                            color = MaterialTheme.colorScheme.primary
+                        )
+                    }
+                    Spacer(modifier = Modifier.height(8.dp))
+                    batch.segments.forEach { segment ->
+                        BatchMealSegmentRow(segment)
+                    }
+                }
+            }
         }
     }
 }
@@ -340,28 +377,25 @@ fun ProductAddDetail(
     viewModel: MainViewModel,
     product: ProductDto,
     mealType: String,
-    initialPortion: ConsumedMealDto? = null,
+    date: String,
+    initialPortion: ConsumedPortionDto? = null,
     onBack: () -> Unit,
     onConfirm: () -> Unit
 ) {
     var amountText by remember { 
-        mutableStateOf(initialPortion?.weightG?.let { if(it == 0.0) "" else it.toString() } ?: "") 
+        mutableStateOf(initialPortion?.consumedWeightG?.let { if(it == 0.0) "" else it.toString() } ?: "") 
     }
     var unitType by remember { 
         mutableStateOf("g")
-    } // "g" lub "unit"
-
-    val currentWeight = when {
-        amountText.isEmpty() -> 0.0
-        else -> amountText.toDoubleOrNull() ?: 0.0
     }
+
+    val currentAmount = amountText.toDoubleOrNull() ?: 0.0
     
-    // API ProductDto does not have unitWeightG or unitName like the UI model had.
-    // We'll default to grams for now or assume 100g units if unknown.
-    val unitWeightG = 100.0 // Defaulting
-    val unitName = "szt"
+    val hasUnitInfo = product.unitWeightG != null && product.unitWeightG > 0
+    val unitWeightG = product.unitWeightG ?: 100.0
+    val unitName = product.unitName ?: "szt"
     
-    val finalWeight = if (unitType == "unit") currentWeight * unitWeightG else currentWeight
+    val finalWeight = if (unitType == "unit") currentAmount * unitWeightG else currentAmount
     
     val calculatedCals = (finalWeight / 100.0) * product.calories
     val calculatedProtein = (finalWeight / 100.0) * product.protein
@@ -370,7 +404,7 @@ fun ProductAddDetail(
 
     Column(modifier = Modifier.fillMaxSize().padding(16.dp)) {
         Row(verticalAlignment = Alignment.CenterVertically) {
-            IconButton(onClick = onBack) { Icon(Icons.Default.ArrowBack, null) }
+            IconButton(onClick = onBack) { Icon(Icons.AutoMirrored.Filled.ArrowBack, null) }
             Text(product.name, style = MaterialTheme.typography.titleLarge)
         }
         
@@ -381,14 +415,26 @@ fun ProductAddDetail(
         
         // Sugerowane wielkości
         Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            QuickAmountButton("0.5 $unitName", modifier = Modifier.weight(1f)) { 
-                amountText = "0.5"; unitType = "unit" 
-            }
-            QuickAmountButton("1 $unitName", modifier = Modifier.weight(1f)) { 
-                amountText = "1"; unitType = "unit" 
-            }
-            QuickAmountButton("2 $unitName", modifier = Modifier.weight(1f)) { 
-                amountText = "2"; unitType = "unit" 
+            if (hasUnitInfo) {
+                QuickAmountButton("0.5 $unitName", modifier = Modifier.weight(1f)) {
+                    amountText = "0.5"; unitType = "unit"
+                }
+                QuickAmountButton("1 $unitName", modifier = Modifier.weight(1f)) {
+                    amountText = "1"; unitType = "unit"
+                }
+                QuickAmountButton("2 $unitName", modifier = Modifier.weight(1f)) {
+                    amountText = "2"; unitType = "unit"
+                }
+            } else {
+                QuickAmountButton("50g", modifier = Modifier.weight(1f)) {
+                    amountText = "50"; unitType = "g"
+                }
+                QuickAmountButton("100g", modifier = Modifier.weight(1f)) {
+                    amountText = "100"; unitType = "g"
+                }
+                QuickAmountButton("250g", modifier = Modifier.weight(1f)) {
+                    amountText = "250"; unitType = "g"
+                }
             }
         }
         
@@ -404,7 +450,7 @@ fun ProductAddDetail(
                 keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
                 singleLine = true
             )
-            val units = listOf("g", unitName)
+            val units = if (hasUnitInfo) listOf("g", unitName) else listOf("g")
             var expanded by remember { mutableStateOf(false) }
             Box {
                 OutlinedButton(onClick = { expanded = true }) {
@@ -414,9 +460,9 @@ fun ProductAddDetail(
                     units.forEach { u ->
                         DropdownMenuItem(
                             text = { Text(u) },
-                            onClick = { 
+                            onClick = {
                                 unitType = if (u == "g") "g" else "unit"
-                                expanded = false 
+                                expanded = false
                             }
                         )
                     }
@@ -439,14 +485,14 @@ fun ProductAddDetail(
         Button(
             onClick = {
                 val request = ConsumeProductRequest(
-                    productId = product.id ?: "",
+                    product = product,
                     weightG = finalWeight,
-                    mealType = mealType.uppercase()
+                    mealDate = date,
+                    mealType = MealTypeMapper.toApi(mealType)
                 )
-                val date = Clock.formatToApiDate(Clock.now())
                 
                 if (initialPortion != null) {
-                    viewModel.updateConsumedMeal(initialPortion.id, request, date)
+                    viewModel.updateConsumedMeal(initialPortion.id.toString(), request, date)
                 } else {
                     viewModel.consumeProduct(request, date)
                 }
@@ -462,49 +508,62 @@ fun ProductAddDetail(
     }
 }
 
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun BatchMealAddDetail(
     viewModel: MainViewModel,
     batchMeal: BatchMealDto,
-    mealType: String,
-    initialPortions: List<ConsumedMealDto> = emptyList(),
+    sourceRecipe: RecipeDto? = null,
+    initialMealType: String,
+    initialDate: String,
+    isPredefined: Boolean,
+    initialPortions: List<ConsumedPortionDto> = emptyList(),
     onBack: () -> Unit,
     onConfirm: () -> Unit
 ) {
-    var mode by remember { 
-        mutableStateOf("percent") 
-    } // "percent" lub "g"
-    var commonValueText by remember { 
-        mutableStateOf(if (initialPortions.isEmpty()) "25" else "") 
-    } // Domyślnie 25% (jedna z 4 porcji)
+    var mode by remember {
+        mutableStateOf("percent")
+    }
+    var commonValueText by remember(sourceRecipe, initialPortions) {
+        mutableStateOf(
+            when {
+                initialPortions.isNotEmpty() -> ""
+                sourceRecipe != null -> "100"
+                else -> "25"
+            }
+        )
+    }
 
     val segmentsValues = remember {
-        mutableStateMapOf<String, String>().apply {
+        mutableStateMapOf<Long, String>().apply {
             batchMeal.segments.forEach { segment ->
-                val segmentId = segment.id ?: return@forEach
-                val initial = initialPortions.find { it.id == segmentId }
-                this[segmentId] = initial?.weightG?.let { if(it == 0.0) "" else it.toString() } ?: ""
+                val initial = initialPortions.find { it.segmentName == segment.name }
+                this[segment.id] = initial?.consumedWeightG?.let { if(it == 0.0) "" else it.toString() } ?: ""
             }
         }
     }
+    
+    var selectedTimestamp by remember { mutableStateOf(Clock.now()) } // Będziemy używać Date.parse w przyszłości, na razie Clock.now()
+    var showDatePicker by remember { mutableStateOf(false) }
+    
+    val mealTypes = listOf("Śniadanie", "Drugie śniadanie", "Obiad", "Podwieczorek", "Kolacja", "Inne")
+    var selectedMealType by remember { mutableStateOf(initialMealType) }
+    var expandedMealDropdown by remember { mutableStateOf(false) }
 
-    // Aktualizacja pól na podstawie wartości wspólnej (tylko w trybie procentowym)
+    val datePickerState = rememberDatePickerState(
+        initialSelectedDateMillis = selectedTimestamp
+    )
+
+    // Propaguje wspólną wartość do wszystkich sekcji (procent lub gramy)
     LaunchedEffect(commonValueText, mode) {
-        if (mode == "percent") {
-            batchMeal.segments.forEach { segment ->
-                segment.id?.let { segmentsValues[it] = commonValueText }
-            }
-        } else if (commonValueText.isEmpty()) {
-            // Jeśli czyścimy common, czyścimy wszystko
-            batchMeal.segments.forEach { segment ->
-                segment.id?.let { segmentsValues[it] = "" }
-            }
+        batchMeal.segments.forEach { segment ->
+            segmentsValues[segment.id] = commonValueText
         }
     }
 
-    Column(modifier = Modifier.fillMaxSize().padding(16.dp)) {
+    Column(modifier = Modifier.fillMaxSize().padding(16.dp).verticalScroll(rememberScrollState())) {
         Row(verticalAlignment = Alignment.CenterVertically) {
-            IconButton(onClick = onBack) { Icon(Icons.Default.ArrowBack, null) }
+            IconButton(onClick = onBack) { Icon(Icons.AutoMirrored.Filled.ArrowBack, null) }
             Text(batchMeal.name, style = MaterialTheme.typography.titleLarge)
         }
 
@@ -535,7 +594,7 @@ fun BatchMealAddDetail(
             value = commonValueText,
             onValueChange = { commonValueText = it },
             modifier = Modifier.fillMaxWidth(),
-            label = { Text(if (mode == "percent") "Ile procent całej patelni? (%)" else "Ustaw wspólną wagę (g)") },
+            label = { Text(if (mode == "percent") "Ile procent pozostałości? (%)" else "Ustaw wspólną wagę (g)") },
             keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number)
         )
 
@@ -545,69 +604,222 @@ fun BatchMealAddDetail(
             modifier = Modifier.padding(top = 16.dp, bottom = 8.dp)
         )
 
-        LazyColumn(modifier = Modifier.weight(1f)) {
-            items(batchMeal.segments) { segment ->
-                val segmentId = segment.id ?: return@items
-                val segmentValue = segmentsValues[segmentId] ?: ""
+        Column(modifier = Modifier.weight(1f, fill = false)) {
+            batchMeal.segments.forEach { segment ->
+                val segmentValue = segmentsValues[segment.id] ?: ""
+                val assignedWeight = if (mode == "percent") {
+                    ((segmentValue.toDoubleOrNull() ?: 0.0) / 100.0) * segment.currentWeightG
+                } else {
+                    segmentValue.toDoubleOrNull() ?: 0.0
+                }
+                val maxWeight = segment.currentWeightG
+                val remainingAfter = (maxWeight - assignedWeight).coerceAtLeast(0.0)
+                val isOverLimit = assignedWeight > maxWeight && assignedWeight > 0
 
-                Card(modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp)) {
-                    Row(
-                        modifier = Modifier.padding(12.dp),
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(12.dp)
-                    ) {
-                        Column(modifier = Modifier.weight(1f)) {
-                            Text(segment.name, fontWeight = FontWeight.Bold)
-                            val weight = if (mode == "percent") {
-                                ((segmentValue.toDoubleOrNull() ?: 0.0) / 100.0) * segment.initialWeightG
-                            } else {
-                                segmentValue.toDoubleOrNull() ?: 0.0
+                Card(
+                    modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp),
+                    colors = if (isOverLimit) {
+                        CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.errorContainer.copy(alpha = 0.35f))
+                    } else {
+                        CardDefaults.cardColors()
+                    }
+                ) {
+                    Column(modifier = Modifier.padding(12.dp)) {
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(12.dp)
+                        ) {
+                            Column(modifier = Modifier.weight(1f)) {
+                                Text(segment.name, fontWeight = FontWeight.Bold)
+                                segment.product?.let {
+                                    Text(it.name, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                                }
+                                Text(
+                                    "Dostępne: ${maxWeight.toInt()}g · ${segment.remainingKcal().toInt()} kcal",
+                                    style = MaterialTheme.typography.bodySmall
+                                )
                             }
-                            Text("Waga: ${weight.toInt()}g", style = MaterialTheme.typography.bodySmall)
-                            Text(
-                                "${((weight / 100.0) * segment.product.calories).toInt()} kcal",
-                                color = MaterialTheme.colorScheme.primary,
-                                style = MaterialTheme.typography.bodySmall
+
+                            OutlinedTextField(
+                                value = segmentValue,
+                                onValueChange = { segmentsValues[segment.id] = it },
+                                modifier = Modifier.width(100.dp),
+                                label = { Text(if (mode == "percent") "%" else "g") },
+                                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                                singleLine = true,
+                                isError = isOverLimit
                             )
                         }
 
-                        OutlinedTextField(
-                            value = segmentValue,
-                            onValueChange = { segmentsValues[segmentId] = it },
-                            modifier = Modifier.width(100.dp),
-                            label = { Text(if (mode == "percent") "%" else "g") },
-                            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
-                            singleLine = true
+                        if (assignedWeight > 0) {
+                            Spacer(modifier = Modifier.height(8.dp))
+                            Text(
+                                "Nałożysz: ${assignedWeight.toInt()}g · ${segment.kcalForWeight(assignedWeight).toInt()} kcal",
+                                style = MaterialTheme.typography.bodySmall,
+                                fontWeight = FontWeight.Medium,
+                                color = MaterialTheme.colorScheme.primary
+                            )
+                            Text(
+                                "Zostanie: ${remainingAfter.toInt()}g · ${segment.kcalForWeight(remainingAfter).toInt()} kcal",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+
+                        if (isOverLimit) {
+                            Text(
+                                "Maksymalnie ${maxWeight.toInt()}g w tej sekcji",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.error,
+                                modifier = Modifier.padding(top = 4.dp)
+                            )
+                        }
+
+                        Spacer(modifier = Modifier.height(6.dp))
+                        LinearProgressIndicator(
+                            progress = { segment.remainingProgress() },
+                            modifier = Modifier.fillMaxWidth().height(6.dp).clip(CircleShape),
                         )
                     }
                 }
             }
         }
+        
+        Spacer(modifier = Modifier.height(16.dp))
+        
+        if (isPredefined) {
+            Text("Data posiłku:", style = MaterialTheme.typography.labelMedium)
+            Text(initialDate, style = MaterialTheme.typography.bodyLarge, fontWeight = FontWeight.Bold, modifier = Modifier.padding(vertical = 4.dp))
+            
+            Spacer(modifier = Modifier.height(8.dp))
+            
+            Text("Przypisz do posiłku:", style = MaterialTheme.typography.labelMedium)
+            Text(initialMealType, style = MaterialTheme.typography.bodyLarge, fontWeight = FontWeight.Bold, modifier = Modifier.padding(vertical = 4.dp))
+        } else {
+            Text("Data posiłku:", style = MaterialTheme.typography.labelMedium)
+            OutlinedCard(
+                onClick = { showDatePicker = true },
+                modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp)
+            ) {
+                Row(modifier = Modifier.padding(12.dp), verticalAlignment = Alignment.CenterVertically) {
+                    Icon(Icons.Default.DateRange, null)
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Text("Dzień: ${if (selectedTimestamp / 86400000L == Clock.now() / 86400000L) "Dzisiaj" else "Inny"}")
+                }
+            }
+
+            Spacer(modifier = Modifier.height(12.dp))
+
+            Text("Przypisz do posiłku:", style = MaterialTheme.typography.labelMedium)
+            ExposedDropdownMenuBox(
+                expanded = expandedMealDropdown,
+                onExpandedChange = { expandedMealDropdown = !expandedMealDropdown },
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                OutlinedTextField(
+                    value = selectedMealType,
+                    onValueChange = {},
+                    readOnly = true,
+                    trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = expandedMealDropdown) },
+                    modifier = Modifier.menuAnchor(MenuAnchorType.PrimaryNotEditable, true).fillMaxWidth()
+                )
+                ExposedDropdownMenu(
+                    expanded = expandedMealDropdown,
+                    onDismissRequest = { expandedMealDropdown = false }
+                ) {
+                    mealTypes.forEach { type ->
+                        DropdownMenuItem(
+                            text = { Text(type) },
+                            onClick = {
+                                selectedMealType = type
+                                expandedMealDropdown = false
+                            }
+                        )
+                    }
+                }
+            }
+        }
+        
+        Spacer(modifier = Modifier.height(16.dp))
 
         Button(
             onClick = {
+                val finalDate = if (isPredefined) initialDate else Clock.formatToApiDate(selectedTimestamp)
+                val finalMealType = if (isPredefined) initialMealType else selectedMealType
+
+                if (sourceRecipe != null) {
+                    val segmentWeights = batchMeal.segments.mapNotNull { segment ->
+                        val value = segmentsValues[segment.id]?.toDoubleOrNull() ?: return@mapNotNull null
+                        if (value <= 0) return@mapNotNull null
+                        val weight = if (mode == "percent") {
+                            (value / 100.0) * segment.currentWeightG
+                        } else {
+                            value
+                        }
+                        if (weight <= 0 || weight > segment.currentWeightG) return@mapNotNull null
+                        segment.id to weight
+                    }.toMap()
+
+                    viewModel.consumeRecipePortions(
+                        recipe = sourceRecipe,
+                        segmentWeights = segmentWeights,
+                        mealType = finalMealType,
+                        date = finalDate,
+                        onComplete = onConfirm
+                    )
+                    return@Button
+                }
+
                 batchMeal.segments.forEach { segment ->
-                    val segmentId = segment.id ?: return@forEach
-                    val value = segmentsValues[segmentId]?.toDoubleOrNull() ?: 0.0
+                    val value = segmentsValues[segment.id]?.toDoubleOrNull() ?: 0.0
                     if (value <= 0) return@forEach
 
-                    val weight = if (mode == "percent") (value / 100.0) * segment.initialWeightG else value
+                    val weight = if (mode == "percent") {
+                        (value / 100.0) * segment.currentWeightG
+                    } else {
+                        value
+                    }
+                    if (weight <= 0 || weight > segment.currentWeightG) return@forEach
                     
                     viewModel.consumePortion(
                         request = ConsumePortionRequest(
-                            segmentId = segmentId,
+                            segmentId = segment.id,
                             weightG = weight,
-                            mealType = mealType.uppercase()
+                            mealDate = finalDate,
+                            mealType = MealTypeMapper.toApi(finalMealType)
                         ),
-                        date = Clock.formatToApiDate(Clock.now()) // Assuming today for now
+                        date = finalDate
                     )
                 }
                 onConfirm()
             },
             modifier = Modifier.fillMaxWidth().padding(vertical = 16.dp),
-            enabled = segmentsValues.values.any { (it.toDoubleOrNull() ?: 0.0) > 0 }
+            enabled = batchMeal.segments.any { segment ->
+                val value = segmentsValues[segment.id]?.toDoubleOrNull() ?: 0.0
+                if (value <= 0) return@any false
+                val weight = if (mode == "percent") (value / 100.0) * segment.currentWeightG else value
+                weight > 0 && weight <= segment.currentWeightG
+            }
         ) {
             Text("Dodaj wybrane części")
+        }
+    }
+    
+    if (showDatePicker) {
+        DatePickerDialog(
+            onDismissRequest = { showDatePicker = false },
+            confirmButton = {
+                TextButton(onClick = {
+                    datePickerState.selectedDateMillis?.let { selectedTimestamp = it }
+                    showDatePicker = false
+                }) { Text("OK") }
+            },
+            dismissButton = {
+                TextButton(onClick = { showDatePicker = false }) { Text("Anuluj") }
+            }
+        ) {
+            DatePicker(state = datePickerState)
         }
     }
 }

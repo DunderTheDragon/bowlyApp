@@ -5,14 +5,21 @@ import androidx.lifecycle.viewModelScope
 import com.cantbebetter.bowly.data.SettingsManager
 import com.cantbebetter.bowly.data.network.*
 import com.cantbebetter.bowly.models.DailyStats
+import com.cantbebetter.bowly.models.MealTypeMapper
+import com.cantbebetter.bowly.ui.screens.isLikelyBarcode
+import com.cantbebetter.bowly.ui.screens.toCreateBatchMealRequest
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 
 sealed class AppState {
     object Loading : AppState()
     object EnterServerAddress : AppState()
-    object SetupRequired : AppState()
     object LoginRequired : AppState()
     object Authenticated : AppState()
 }
@@ -24,6 +31,9 @@ class MainViewModel(private val settingsManager: SettingsManager) : ViewModel() 
     private val _error = MutableStateFlow<String?>(null)
     val error = _error.asStateFlow()
 
+    private val _registrationSuccess = MutableStateFlow<Boolean>(false)
+    val registrationSuccess = _registrationSuccess.asStateFlow()
+
     private val _adminKeys = MutableStateFlow<AdminKeysDto?>(null)
     val adminKeys = _adminKeys.asStateFlow()
 
@@ -32,6 +42,8 @@ class MainViewModel(private val settingsManager: SettingsManager) : ViewModel() 
 
     private val _userProfile = MutableStateFlow<UserDto?>(null)
     val userProfile = _userProfile.asStateFlow()
+
+    private var profileUpdateJob: Job? = null
 
     private val _dailyStats = MutableStateFlow<DailyStats?>(null)
     val dailyStats = _dailyStats.asStateFlow()
@@ -42,11 +54,34 @@ class MainViewModel(private val settingsManager: SettingsManager) : ViewModel() 
     private val _activeBatchMeals = MutableStateFlow<List<BatchMealDto>>(emptyList())
     val activeBatchMeals = _activeBatchMeals.asStateFlow()
 
-    private val _searchResults = MutableStateFlow<List<ProductDto>>(emptyList())
-    val searchResults = _searchResults.asStateFlow()
+    private val _productSearchQuery = MutableStateFlow("")
+    private val _externalSearchResults = MutableStateFlow<List<ProductDto>>(emptyList())
+    private val _localProducts = MutableStateFlow<List<ProductDto>>(emptyList())
+    val localProducts = _localProducts.asStateFlow()
+    private var externalSearchJob: Job? = null
+
+    val displaySearchResults = combine(
+        _localProducts,
+        _externalSearchResults,
+        _productSearchQuery
+    ) { local, external, query ->
+        mergeSearchResults(local, external, query)
+    }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
+
+    private val _isSearchingProducts = MutableStateFlow<Boolean>(false)
+    val isSearchingProducts = _isSearchingProducts.asStateFlow()
 
     private val _recipeSearchResults = MutableStateFlow<List<RecipeDto>>(emptyList())
     val recipeSearchResults = _recipeSearchResults.asStateFlow()
+
+    private val _allRecipes = MutableStateFlow<List<RecipeDto>>(emptyList())
+    val allRecipes = _allRecipes.asStateFlow()
+
+    private val _barcodeToPrefill = MutableStateFlow<String?>(null)
+    val barcodeToPrefill = _barcodeToPrefill.asStateFlow()
+
+    private val _scannedProduct = MutableStateFlow<ProductDto?>(null)
+    val scannedProduct = _scannedProduct.asStateFlow()
 
     private var apiService: ApiService? = null
 
@@ -55,7 +90,15 @@ class MainViewModel(private val settingsManager: SettingsManager) : ViewModel() 
     }
 
     fun setServerAddress(url: String) {
-        val sanitizedUrl = url.trim().removeSuffix("/")
+        if (url.isBlank()) {
+            settingsManager.baseUrl = ""
+            _uiState.value = AppState.EnterServerAddress
+            return
+        }
+        var sanitizedUrl = url.trim().removeSuffix("/")
+        if (!sanitizedUrl.startsWith("http://") && !sanitizedUrl.startsWith("https://")) {
+            sanitizedUrl = "http://$sanitizedUrl"
+        }
         settingsManager.baseUrl = sanitizedUrl
         _error.value = null
         checkStatus()
@@ -73,31 +116,27 @@ class MainViewModel(private val settingsManager: SettingsManager) : ViewModel() 
         viewModelScope.launch {
             try {
                 val status = apiService?.getStatus()
-                if (status?.isSetup == false) {
-                    _uiState.value = AppState.SetupRequired
+                if (settingsManager.token.isNullOrBlank()) {
+                    _uiState.value = AppState.LoginRequired
                 } else {
-                    if (settingsManager.token.isNullOrBlank()) {
+                    try {
+                        // Weryfikacja tokena przez pobranie profilu
+                        val profile = apiService?.getUserProfile()
+                        if (profile != null) {
+                            _userProfile.value = profile
+                            _dailyStats.value = calculateDailyStats(profile)
+                            _uiState.value = AppState.Authenticated
+                        } else {
+                            _uiState.value = AppState.LoginRequired
+                        }
+                    } catch (e: Exception) {
+                        // Token nieważny lub błąd połączenia
                         _uiState.value = AppState.LoginRequired
-                    } else {
-                        _uiState.value = AppState.Authenticated
                     }
                 }
             } catch (e: Exception) {
                 _error.value = "Nie można połączyć się z serwerem: ${e.message}"
                 _uiState.value = AppState.EnterServerAddress
-            }
-        }
-    }
-
-    fun setupAdmin(request: SetupRequest) {
-        viewModelScope.launch {
-            try {
-                val success = apiService?.setupAdmin(request) ?: false
-                if (success) {
-                    _uiState.value = AppState.LoginRequired
-                }
-            } catch (e: Exception) {
-                _error.value = "Błąd konfiguracji: ${e.message}"
             }
         }
     }
@@ -146,12 +185,16 @@ class MainViewModel(private val settingsManager: SettingsManager) : ViewModel() 
             try {
                 val success = apiService?.registerUser(request) ?: false
                 if (success) {
-                    _users.value = apiService?.getUsers() ?: emptyList()
+                    _registrationSuccess.value = true
                 }
             } catch (e: Exception) {
                 _error.value = "Błąd rejestracji użytkownika: ${e.message}"
             }
         }
+    }
+
+    fun registrationSuccessHandled() {
+        _registrationSuccess.value = false
     }
 
     fun deleteUser(userId: Long) {
@@ -181,16 +224,21 @@ class MainViewModel(private val settingsManager: SettingsManager) : ViewModel() 
     }
 
     fun updateUserProfile(user: UserDto) {
-        viewModelScope.launch {
+        _userProfile.value = user
+        _dailyStats.value = calculateDailyStats(user)
+
+        profileUpdateJob?.cancel()
+        profileUpdateJob = viewModelScope.launch {
+            delay(400)
             try {
-                val success = apiService?.updateUserProfile(user) ?: false
-                if (success) {
-                    _userProfile.value = user
-                    _dailyStats.value = calculateDailyStats(user)
-                    _error.value = "Profil zaktualizowany"
+                val saved = apiService?.updateUserProfile(user)
+                if (saved != null) {
+                    _userProfile.value = saved
+                    _dailyStats.value = calculateDailyStats(saved)
                 }
             } catch (e: Exception) {
                 _error.value = "Błąd aktualizacji profilu: ${e.message}"
+                loadUserProfile()
             }
         }
     }
@@ -240,63 +288,239 @@ class MainViewModel(private val settingsManager: SettingsManager) : ViewModel() 
         }
     }
 
+    fun addWorkout(name: String, caloriesBurned: Double, date: String) {
+        viewModelScope.launch {
+            try {
+                apiService?.addWorkout(
+                    CreateWorkoutActivityRequest(
+                        name = name,
+                        caloriesBurned = caloriesBurned,
+                        activityDate = date
+                    )
+                )
+                loadDailySummary(date)
+            } catch (e: Exception) {
+                _error.value = "Błąd dodawania treningu: ${e.message}"
+            }
+        }
+    }
+
+    fun deleteWorkout(id: Long, date: String) {
+        viewModelScope.launch {
+            try {
+                if (apiService?.deleteWorkout(id) == true) {
+                    loadDailySummary(date)
+                }
+            } catch (e: Exception) {
+                _error.value = "Błąd usuwania treningu: ${e.message}"
+            }
+        }
+    }
+
     // Products & Recipes
-    fun searchProducts(query: String) {
-        if (query.isBlank()) {
-            _searchResults.value = emptyList()
+    fun onProductSearchQueryChanged(query: String) {
+        _productSearchQuery.value = query
+        externalSearchJob?.cancel()
+
+        if (query.isEmpty()) {
+            _externalSearchResults.value = emptyList()
+            _isSearchingProducts.value = false
             return
         }
-        viewModelScope.launch {
+
+        if (isLikelyBarcode(query)) {
+            searchByBarcode(query)
+            return
+        }
+
+        if (query.length < MIN_EXTERNAL_QUERY_LENGTH) {
+            _externalSearchResults.value = emptyList()
+            _isSearchingProducts.value = false
+            return
+        }
+
+        externalSearchJob = viewModelScope.launch {
+            delay(EXTERNAL_SEARCH_DEBOUNCE_MS)
+            if (_productSearchQuery.value != query) return@launch
+
+            _isSearchingProducts.value = true
             try {
-                _searchResults.value = apiService?.searchProducts(query) ?: emptyList()
+                val results = apiService?.searchExternalProducts(query) ?: emptyList()
+                if (_productSearchQuery.value == query) {
+                    _externalSearchResults.value = results
+                }
             } catch (e: Exception) {
-                _error.value = "Błąd wyszukiwania: ${e.message}"
+                if (_productSearchQuery.value == query) {
+                    _error.value = "Błąd wyszukiwania API: ${e.message}"
+                }
+            } finally {
+                if (_productSearchQuery.value == query) {
+                    _isSearchingProducts.value = false
+                }
             }
         }
     }
 
-    fun addLocalProduct(product: ProductDto) {
-        viewModelScope.launch {
+    private fun searchByBarcode(barcode: String) {
+        _externalSearchResults.value = emptyList()
+
+        val inLocal = _localProducts.value.any { it.barcode == barcode.trim() }
+        if (inLocal) {
+            _isSearchingProducts.value = false
+            return
+        }
+
+        externalSearchJob = viewModelScope.launch {
+            delay(EXTERNAL_SEARCH_DEBOUNCE_MS)
+            if (_productSearchQuery.value != barcode) return@launch
+
+            _isSearchingProducts.value = true
             try {
-                apiService?.addLocalProduct(product)
-                _error.value = "Produkt dodany pomyślnie"
+                val product = apiService?.getProductByBarcode(barcode.trim())
+                if (product != null && _productSearchQuery.value == barcode) {
+                    _externalSearchResults.value = listOf(product)
+                }
             } catch (e: Exception) {
-                _error.value = "Błąd dodawania produktu: ${e.message}"
+                if (_productSearchQuery.value == barcode) {
+                    _error.value = "Błąd wyszukiwania kodu kreskowego: ${e.message}"
+                }
+            } finally {
+                if (_productSearchQuery.value == barcode) {
+                    _isSearchingProducts.value = false
+                }
             }
         }
     }
 
-    fun searchRecipes(query: String) {
-        if (query.isBlank()) {
-            _recipeSearchResults.value = emptyList()
-            return
-        }
+    suspend fun ensureProductSaved(product: ProductDto): ProductDto {
+        if (product.id != null) return product
+        return apiService?.saveLocalProduct(product) ?: product
+    }
+
+    fun cacheProduct(product: ProductDto, onResult: (ProductDto) -> Unit) {
         viewModelScope.launch {
             try {
-                _recipeSearchResults.value = apiService?.searchRecipes(query) ?: emptyList()
+                val saved = ensureProductSaved(product)
+                loadLocalProducts()
+                onResult(saved)
+            } catch (e: Exception) {
+                _error.value = "Błąd zapisywania produktu: ${e.message}"
+                onResult(product)
+            }
+        }
+    }
+
+    fun clearProductSearch() {
+        externalSearchJob?.cancel()
+        _productSearchQuery.value = ""
+        _externalSearchResults.value = emptyList()
+        _isSearchingProducts.value = false
+    }
+
+    fun searchProductByBarcode(barcode: String) {
+        viewModelScope.launch {
+            _isSearchingProducts.value = true
+            try {
+                val product = apiService?.getProductByBarcode(barcode)
+                if (product != null) {
+                    val saved = ensureProductSaved(product)
+                    loadLocalProducts()
+                    _scannedProduct.value = saved
+                } else {
+                    _externalSearchResults.value = emptyList()
+                    _barcodeToPrefill.value = barcode
+                }
+            } catch (e: Exception) {
+                _error.value = "Błąd skanowania: ${e.message}"
+            } finally {
+                _isSearchingProducts.value = false
+            }
+        }
+    }
+
+    fun barcodeHandled() {
+        _barcodeToPrefill.value = null
+    }
+
+    fun scannedProductHandled() {
+        _scannedProduct.value = null
+    }
+
+    fun loadLocalProducts() {
+        viewModelScope.launch {
+            try {
+                _localProducts.value = apiService?.getLocalProducts() ?: emptyList()
+            } catch (e: Exception) {
+                _error.value = "Błąd pobierania produktów z bazy: ${e.message}"
+            }
+        }
+    }
+
+    fun saveLocalProduct(product: ProductDto) {
+        viewModelScope.launch {
+            try {
+                apiService?.saveLocalProduct(product)
+                loadLocalProducts()
+            } catch (e: Exception) {
+                _error.value = "Błąd zapisywania produktu: ${e.message}"
+            }
+        }
+    }
+
+    fun loadRecipes(scope: String = "MINE", singleMeal: Boolean? = null, query: String = "") {
+        viewModelScope.launch {
+            try {
+                val results = apiService?.getRecipes(scope = scope, singleMeal = singleMeal, query = query.takeIf { it.isNotBlank() })
+                    ?: emptyList()
+                _allRecipes.value = results
+                if (query.isNotBlank()) {
+                    _recipeSearchResults.value = results
+                }
+            } catch (e: Exception) {
+                _error.value = "Błąd pobierania przepisów: ${e.message}"
+            }
+        }
+    }
+
+    fun searchRecipes(query: String, scope: String = "MINE", singleMeal: Boolean? = null) {
+        viewModelScope.launch {
+            try {
+                val results = if (query.isBlank()) {
+                    apiService?.getRecipes(scope = scope, singleMeal = singleMeal) ?: emptyList()
+                } else {
+                    apiService?.searchRecipes(query, scope = scope, singleMeal = singleMeal) ?: emptyList()
+                }
+                _recipeSearchResults.value = results
             } catch (e: Exception) {
                 _error.value = "Błąd wyszukiwania przepisów: ${e.message}"
             }
         }
     }
 
-    fun saveRecipe(recipe: RecipeDto) {
+    fun saveRecipe(recipe: RecipeDto, onSaved: ((RecipeDto) -> Unit)? = null) {
         viewModelScope.launch {
             try {
-                apiService?.saveRecipe(recipe)
-                _error.value = "Przepis zapisany pomyślnie"
+                val prepared = ensureRecipeProductsCached(recipe)
+                val saved = if (prepared.id != null) {
+                    apiService?.updateRecipe(prepared.id, prepared)
+                } else {
+                    apiService?.saveRecipe(prepared)
+                }
+                if (saved != null) {
+                    onSaved?.invoke(saved)
+                }
             } catch (e: Exception) {
                 _error.value = "Błąd zapisywania przepisu: ${e.message}"
             }
         }
     }
 
-    fun deleteRecipe(id: String) {
+    fun deleteRecipe(id: String, onDeleted: (() -> Unit)? = null) {
         viewModelScope.launch {
             try {
                 if (apiService?.deleteRecipe(id) == true) {
-                    _error.value = "Przepis usunięty"
-                    // Optionally refresh list if we had one
+                    onDeleted?.invoke()
+                    loadRecipes()
                 }
             } catch (e: Exception) {
                 _error.value = "Błąd usuwania przepisu: ${e.message}"
@@ -304,25 +528,100 @@ class MainViewModel(private val settingsManager: SettingsManager) : ViewModel() 
         }
     }
 
-    // Batch Meals
+    fun createBatchFromRecipe(recipe: RecipeDto, onComplete: (() -> Unit)? = null) {
+        viewModelScope.launch {
+            try {
+                apiService?.createBatchMeal(recipe.toCreateBatchMealRequest())
+                refreshActiveBatchMeals()
+                onComplete?.invoke()
+            } catch (e: Exception) {
+                _error.value = "Błąd tworzenia patelni z przepisu: ${e.message}"
+            }
+        }
+    }
+
+    fun createBatchMealAndOptionalRecipe(
+        batchRequest: CreateBatchMealRequest,
+        onComplete: (() -> Unit)? = null
+    ) = createBatchMeal(batchRequest, onComplete)
+
+    fun createBatchMeal(request: CreateBatchMealRequest, onComplete: (() -> Unit)? = null) {
+        viewModelScope.launch {
+            try {
+                apiService?.createBatchMeal(request)
+                refreshActiveBatchMeals()
+                onComplete?.invoke()
+            } catch (e: Exception) {
+                _error.value = "Błąd tworzenia patelni: ${e.message}"
+            }
+        }
+    }
+
+    fun consumeRecipePortions(
+        recipe: RecipeDto,
+        segmentWeights: Map<Long, Double>,
+        mealType: String,
+        date: String,
+        onComplete: (() -> Unit)? = null
+    ) {
+        viewModelScope.launch {
+            try {
+                val requests = com.cantbebetter.bowly.ui.screens.buildConsumeRequestsFromRecipe(
+                    recipe, segmentWeights, date, mealType
+                )
+                var allSuccess = requests.isNotEmpty()
+                requests.forEach { request ->
+                    val success = apiService?.consumeProduct(request) ?: false
+                    if (!success) allSuccess = false
+                }
+                if (allSuccess) {
+                    loadDailySummary(date)
+                    onComplete?.invoke()
+                } else {
+                    _error.value = "Nie udało się dodać całego przepisu do posiłku"
+                }
+            } catch (e: Exception) {
+                _error.value = "Błąd dodawania przepisu: ${e.message}"
+            }
+        }
+    }
+
+    private suspend fun refreshActiveBatchMeals() {
+        _activeBatchMeals.value = apiService?.getActiveBatchMeals() ?: emptyList()
+    }
+
+    private suspend fun ensureRecipeProductsCached(recipe: RecipeDto): RecipeDto {
+        val sections = recipe.sections.map { section ->
+            section.copy(
+                ingredients = section.ingredients.map { ingredient ->
+                    ingredient.copy(product = ensureProductSaved(ingredient.product))
+                }
+            )
+        }
+        return recipe.copy(sections = sections)
+    }
+
     fun loadActiveBatchMeals() {
         viewModelScope.launch {
             try {
-                _activeBatchMeals.value = apiService?.getActiveBatchMeals() ?: emptyList()
+                refreshActiveBatchMeals()
             } catch (e: Exception) {
                 _error.value = "Błąd pobierania patelni: ${e.message}"
             }
         }
     }
 
-    fun createBatchMeal(request: CreateBatchMealRequest) {
+    fun deleteBatchMeal(id: Long) {
         viewModelScope.launch {
             try {
-                apiService?.createBatchMeal(request)
-                loadActiveBatchMeals()
-                _error.value = "Patelnia utworzona pomyślnie"
+                val success = apiService?.deleteBatchMeal(id) ?: false
+                if (success) {
+                    loadActiveBatchMeals()
+                } else {
+                    _error.value = "Nie udało się usunąć patelni"
+                }
             } catch (e: Exception) {
-                _error.value = "Błąd tworzenia patelni: ${e.message}"
+                _error.value = "Błąd usuwania patelni: ${e.message}"
             }
         }
     }
@@ -334,7 +633,8 @@ class MainViewModel(private val settingsManager: SettingsManager) : ViewModel() 
                 if (success) {
                     loadActiveBatchMeals()
                     loadDailySummary(date)
-                    _error.value = "Porcja zjedzona!"
+                } else {
+                    _error.value = "Nie udało się dodać porcji z patelni"
                 }
             } catch (e: Exception) {
                 _error.value = "Błąd konsumpcji: ${e.message}"
@@ -348,10 +648,45 @@ class MainViewModel(private val settingsManager: SettingsManager) : ViewModel() 
                 val success = apiService?.consumeProduct(request) ?: false
                 if (success) {
                     loadDailySummary(date)
-                    _error.value = "Produkt dodany!"
                 }
             } catch (e: Exception) {
                 _error.value = "Błąd dodawania produktu: ${e.message}"
+            }
+        }
+    }
+
+    fun consumeRecipe(recipe: RecipeDto, weightG: Double, mealType: String, date: String) {
+        viewModelScope.launch {
+            try {
+                val totalWeightG = recipe.sections.sumOf { it.ingredients.sumOf { ing -> ing.amount } }
+                val per100gRatio = if (totalWeightG > 0) 100.0 / totalWeightG else 0.0
+
+                val cals100 = recipe.sections.sumOf { it.ingredients.sumOf { ing -> (ing.amount * per100gRatio / 100.0) * ing.product.calories } }
+                val pro100 = recipe.sections.sumOf { it.ingredients.sumOf { ing -> (ing.amount * per100gRatio / 100.0) * ing.product.protein } }
+                val fat100 = recipe.sections.sumOf { it.ingredients.sumOf { ing -> (ing.amount * per100gRatio / 100.0) * ing.product.fat } }
+                val carb100 = recipe.sections.sumOf { it.ingredients.sumOf { ing -> (ing.amount * per100gRatio / 100.0) * ing.product.carbohydrates } }
+
+                val request = ConsumeProductRequest(
+                    product = ProductDto(
+                        id = recipe.id,
+                        name = recipe.name,
+                        calories = cals100,
+                        protein = pro100,
+                        fat = fat100,
+                        carbohydrates = carb100,
+                        source = "RECIPE"
+                    ),
+                    weightG = weightG,
+                    mealDate = date,
+                    mealType = MealTypeMapper.toApi(mealType)
+                )
+
+                val success = apiService?.consumeProduct(request) ?: false
+                if (success) {
+                    loadDailySummary(date)
+                }
+            } catch (e: Exception) {
+                _error.value = "Błąd dodawania przepisu: ${e.message}"
             }
         }
     }
@@ -362,7 +697,6 @@ class MainViewModel(private val settingsManager: SettingsManager) : ViewModel() 
                 val success = apiService?.updateConsumedMeal(id, request) ?: false
                 if (success) {
                     loadDailySummary(date)
-                    _error.value = "Produkt zaktualizowany!"
                 }
             } catch (e: Exception) {
                 _error.value = "Błąd aktualizacji: ${e.message}"
@@ -377,7 +711,6 @@ class MainViewModel(private val settingsManager: SettingsManager) : ViewModel() 
                 if (success) {
                     loadActiveBatchMeals()
                     loadDailySummary(date)
-                    _error.value = "Usunięto posiłek"
                 }
             } catch (e: Exception) {
                 _error.value = "Błąd usuwania: ${e.message}"
@@ -390,9 +723,46 @@ class MainViewModel(private val settingsManager: SettingsManager) : ViewModel() 
     }
 
     fun logout() {
-        settingsManager.token = null
-        settingsManager.username = null
-        settingsManager.role = null
-        _uiState.value = AppState.LoginRequired
+        settingsManager.clear()
+        _uiState.value = AppState.EnterServerAddress
+    }
+
+    private fun mergeSearchResults(
+        local: List<ProductDto>,
+        external: List<ProductDto>,
+        query: String
+    ): List<ProductDto> {
+        val lowerQuery = query.lowercase()
+        val localFiltered = if (lowerQuery.isEmpty()) {
+            local
+        } else {
+            local.filter { it.name.lowercase().contains(lowerQuery) }
+        }
+
+        if (query.length < MIN_EXTERNAL_QUERY_LENGTH) {
+            return localFiltered
+        }
+
+        val localKeys = localFiltered.map { productDedupKey(it) }.toSet()
+        val externalFiltered = external
+            .filter { it.name.lowercase().contains(lowerQuery) }
+            .filter { productDedupKey(it) !in localKeys }
+
+        return localFiltered + externalFiltered
+    }
+
+    private fun productDedupKey(product: ProductDto): String {
+        if (!product.externalId.isNullOrBlank() && !product.source.isNullOrBlank()) {
+            return "${product.source}:${product.externalId}"
+        }
+        if (!product.externalId.isNullOrBlank()) return "ext:${product.externalId}"
+        if (!product.barcode.isNullOrBlank()) return "barcode:${product.barcode}"
+        if (product.id != null) return "id:${product.id}"
+        return "name:${product.name.lowercase()}"
+    }
+
+    companion object {
+        private const val EXTERNAL_SEARCH_DEBOUNCE_MS = 800L
+        private const val MIN_EXTERNAL_QUERY_LENGTH = 3
     }
 }

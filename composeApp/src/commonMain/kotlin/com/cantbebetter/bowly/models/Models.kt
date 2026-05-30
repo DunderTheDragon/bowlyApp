@@ -23,6 +23,27 @@ data class User(
 val DefaultMealTypes = listOf("Śniadanie", "Obiad", "Kolacja")
 val AllAvailableMealTypes = listOf("Śniadanie", "II Śniadanie", "Obiad", "Podwieczorek", "Kolacja")
 
+object MealTypeMapper {
+    private val uiToApi = mapOf(
+        "Śniadanie" to "BREAKFAST",
+        "II Śniadanie" to "SNACK",
+        "Drugie śniadanie" to "SNACK",
+        "Obiad" to "LUNCH",
+        "Podwieczorek" to "SNACK",
+        "Kolacja" to "DINNER"
+    )
+
+    private val apiToUi = mapOf(
+        "BREAKFAST" to "Śniadanie",
+        "LUNCH" to "Obiad",
+        "DINNER" to "Kolacja",
+        "SNACK" to "II Śniadanie"
+    )
+
+    fun toApi(uiName: String): String = uiToApi[uiName] ?: uiName.uppercase()
+    fun toUi(apiName: String): String = apiToUi[apiName] ?: apiName
+}
+
 @Serializable
 data class MacroRatios(
     val protein: Int,

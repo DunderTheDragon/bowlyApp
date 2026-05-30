@@ -43,16 +43,29 @@ fun MyProductsScreen(
     var showAddRecipeDialog by remember { mutableStateOf(false) }
     
     // Placeholder for search results, should ideally come from viewModel
-    val searchResults by viewModel.searchResults.collectAsState()
+    val localProducts by viewModel.localProducts.collectAsState()
     val recipeSearchResults by viewModel.recipeSearchResults.collectAsState()
 
-    LaunchedEffect(searchQuery, selectedTab) {
-        if (searchQuery.isNotEmpty()) {
-            if (selectedTab == 0) {
-                viewModel.searchProducts(searchQuery)
-            } else {
-                viewModel.searchRecipes(searchQuery)
-            }
+    LaunchedEffect(selectedTab) {
+        if (selectedTab == 0) {
+            viewModel.loadLocalProducts()
+        } else {
+            viewModel.loadRecipes(scope = "MINE")
+        }
+    }
+
+    LaunchedEffect(selectedTab, searchQuery) {
+        if (selectedTab == 1) {
+            kotlinx.coroutines.delay(300)
+            viewModel.searchRecipes(searchQuery, scope = "MINE")
+        }
+    }
+
+    val filteredProducts = remember(localProducts, searchQuery) {
+        if (searchQuery.isEmpty()) {
+            localProducts
+        } else {
+            localProducts.filter { it.name.contains(searchQuery, ignoreCase = true) }
         }
     }
 
@@ -102,7 +115,7 @@ fun MyProductsScreen(
 
             if (selectedTab == 0) {
                 // Products Tab
-                if (searchResults.isEmpty() && searchQuery.isNotEmpty()) {
+                if (filteredProducts.isEmpty() && searchQuery.isNotEmpty()) {
                     Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
                         Text("Brak wyników", color = MaterialTheme.colorScheme.onSurfaceVariant)
                     }
@@ -111,7 +124,7 @@ fun MyProductsScreen(
                         modifier = Modifier.fillMaxSize(),
                         contentPadding = PaddingValues(bottom = 80.dp)
                     ) {
-                        items(searchResults) { product ->
+                        items(filteredProducts) { product ->
                             ListItem(
                                 headlineContent = { Text(product.name) },
                                 supportingContent = {
@@ -129,9 +142,12 @@ fun MyProductsScreen(
                 }
             } else {
                 // Recipes Tab
-                if (recipeSearchResults.isEmpty() && searchQuery.isNotEmpty()) {
+                if (recipeSearchResults.isEmpty()) {
                     Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                        Text("Brak wyników", color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        Text(
+                            if (searchQuery.isNotEmpty()) "Brak wyników" else "Brak przepisów — dodaj pierwszy",
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
                     }
                 } else {
                     LazyColumn(
@@ -143,16 +159,17 @@ fun MyProductsScreen(
                                 headlineContent = { Text(recipe.name) },
                                 supportingContent = {
                                     val totalIngredients = recipe.sections.sumOf { it.ingredients.size }
-                                    Text("$totalIngredients składników")
+                                    Text("$totalIngredients składników · ${recipe.sections.size} sekcji")
                                 },
                                 trailingContent = {
                                     Row {
                                         IconButton(onClick = { editingRecipe = recipe }) {
                                             Icon(Icons.Default.Edit, contentDescription = "Edytuj")
                                         }
-                                        IconButton(onClick = { 
-                                            viewModel.deleteRecipe(recipe.id ?: "")
-                                            viewModel.searchRecipes(searchQuery)
+                                        IconButton(onClick = {
+                                            viewModel.deleteRecipe(recipe.id ?: "") {
+                                                viewModel.loadRecipes(scope = "MINE")
+                                            }
                                         }) {
                                             Icon(Icons.Default.Delete, contentDescription = "Usuń")
                                         }
@@ -180,7 +197,7 @@ fun MyProductsScreen(
             isNew = true,
             onDismiss = { showAddDialog = false },
             onConfirm = { newProduct ->
-                viewModel.addLocalProduct(newProduct)
+                viewModel.saveLocalProduct(newProduct)
                 showAddDialog = false
             }
         )
@@ -192,7 +209,7 @@ fun MyProductsScreen(
             isNew = false,
             onDismiss = { editingProduct = null },
             onConfirm = { updatedProduct ->
-                viewModel.addLocalProduct(updatedProduct)
+                viewModel.saveLocalProduct(updatedProduct)
                 editingProduct = null
             }
         )
@@ -204,8 +221,9 @@ fun MyProductsScreen(
             viewModel = viewModel,
             onDismiss = { showAddRecipeDialog = false },
             onConfirm = { newRecipe ->
-                viewModel.saveRecipe(newRecipe)
-                viewModel.searchRecipes(searchQuery)
+                viewModel.saveRecipe(newRecipe) {
+                    viewModel.loadRecipes(scope = "MINE")
+                }
                 showAddRecipeDialog = false
             }
         )
@@ -217,8 +235,9 @@ fun MyProductsScreen(
             viewModel = viewModel,
             onDismiss = { editingRecipe = null },
             onConfirm = { updatedRecipe ->
-                viewModel.saveRecipe(updatedRecipe)
-                viewModel.searchRecipes(searchQuery)
+                viewModel.saveRecipe(updatedRecipe) {
+                    viewModel.loadRecipes(scope = "MINE")
+                }
                 editingRecipe = null
             }
         )
@@ -237,8 +256,16 @@ fun RecipeEditor(
     val sections = remember { mutableStateListOf<RecipeSectionDto>().apply { addAll(recipe.sections) } }
     
     var showProductSearch by remember { mutableStateOf<Int?>(null) } // Index sekcji, do której dodajemy
-    val searchResults by viewModel.searchResults.collectAsState()
-    var searchQuery by remember { mutableStateOf("") }
+    val localProducts by viewModel.localProducts.collectAsState()
+    var searchProductQuery by remember { mutableStateOf("") }
+
+    val filteredProducts = remember(localProducts, searchProductQuery) {
+        if (searchProductQuery.isEmpty()) {
+            localProducts
+        } else {
+            localProducts.filter { it.name.contains(searchProductQuery, ignoreCase = true) }
+        }
+    }
 
     ModalBottomSheet(
         onDismissRequest = onDismiss,
@@ -354,10 +381,9 @@ fun RecipeEditor(
                 text = {
                     Column {
                         OutlinedTextField(
-                            value = searchQuery,
+                            value = searchProductQuery,
                             onValueChange = { 
-                                searchQuery = it
-                                viewModel.searchProducts(it)
+                                searchProductQuery = it
                             },
                             modifier = Modifier.fillMaxWidth(),
                             placeholder = { Text("Szukaj produktu...") },
@@ -365,7 +391,7 @@ fun RecipeEditor(
                         )
                         Spacer(modifier = Modifier.height(8.dp))
                         LazyColumn(modifier = Modifier.height(300.dp)) {
-                            items(searchResults) { product ->
+                            items(filteredProducts) { product ->
                                 ListItem(
                                     headlineContent = { Text(product.name) },
                                     supportingContent = { Text("${product.calories.toInt()} kcal/100g") },
@@ -375,7 +401,7 @@ fun RecipeEditor(
                                         newIngredients.add(RecipeIngredientDto(product = product, amount = 100.0))
                                         sections[sIdx] = sections[sIdx].copy(ingredients = newIngredients)
                                         showProductSearch = null
-                                        searchQuery = ""
+                                        searchProductQuery = ""
                                     }
                                 )
                             }
@@ -396,13 +422,19 @@ fun EditProductDialog(
     onDismiss: () -> Unit,
     onConfirm: (ProductDto) -> Unit
 ) {
-    var name by remember { mutableStateOf(product.name) }
-    var barcode by remember { mutableStateOf(product.barcode ?: "") }
-    var calories by remember { mutableStateOf(if (isNew && product.calories == 0.0) "" else product.calories.toString()) }
-    var protein by remember { mutableStateOf(if (isNew && product.protein == 0.0) "" else product.protein.toString()) }
-    var fat by remember { mutableStateOf(if (isNew && product.fat == 0.0) "" else product.fat.toString()) }
-    var carbs by remember { mutableStateOf(if (isNew && product.carbohydrates == 0.0) "" else product.carbohydrates.toString()) }
+    var name by remember(product) { mutableStateOf(product.name) }
+    var barcode by remember(product) { mutableStateOf(product.barcode ?: "") }
+    var calories by remember(product) { mutableStateOf(if (isNew && product.calories == 0.0) "" else product.calories.toString()) }
+    var protein by remember(product) { mutableStateOf(if (isNew && product.protein == 0.0) "" else product.protein.toString()) }
+    var fat by remember(product) { mutableStateOf(if (isNew && product.fat == 0.0) "" else product.fat.toString()) }
+    var carbs by remember(product) { mutableStateOf(if (isNew && product.carbohydrates == 0.0) "" else product.carbohydrates.toString()) }
     
+    var unitName by remember(product) { mutableStateOf(product.unitName ?: "sztuka") }
+    var unitWeightG by remember(product) { mutableStateOf(product.unitWeightG?.let { if(it == 0.0) "" else it.toString() } ?: "") }
+    
+    val units = listOf("sztuka", "porcja", "opakowanie", "szklanka", "łyżka")
+    var expanded by remember { mutableStateOf(false) }
+
     AlertDialog(
         onDismissRequest = onDismiss,
         title = { Text(if (isNew) "Dodaj własny produkt" else "Edytuj produkt") },
@@ -411,6 +443,34 @@ fun EditProductDialog(
                 OutlinedTextField(value = name, onValueChange = { name = it }, label = { Text("Nazwa produktu") }, modifier = Modifier.fillMaxWidth())
                 OutlinedTextField(value = barcode, onValueChange = { barcode = it }, label = { Text("Kod kreskowy (opcjonalnie)") }, modifier = Modifier.fillMaxWidth())
                 
+                Spacer(modifier = Modifier.height(16.dp))
+
+                Text("Jednostka opcjonalna", style = MaterialTheme.typography.titleSmall)
+                Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
+                    Box(modifier = Modifier.weight(1f)) {
+                        OutlinedTextField(
+                            value = unitName,
+                            onValueChange = {},
+                            readOnly = true,
+                            label = { Text("Jednostka") },
+                            trailingIcon = { IconButton(onClick = { expanded = true }) { Icon(Icons.Default.ArrowDropDown, null) } },
+                            modifier = Modifier.fillMaxWidth()
+                        )
+                        DropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
+                            units.forEach { unit ->
+                                DropdownMenuItem(text = { Text(unit) }, onClick = { unitName = unit; expanded = false })
+                            }
+                        }
+                    }
+                    OutlinedTextField(
+                        value = unitWeightG,
+                        onValueChange = { unitWeightG = it },
+                        label = { Text("Waga (g)") },
+                        modifier = Modifier.weight(1f),
+                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number)
+                    )
+                }
+
                 Spacer(modifier = Modifier.height(16.dp))
                 
                 // Makroskładniki
@@ -442,7 +502,9 @@ fun EditProductDialog(
                         protein = protein.toDoubleOrNull() ?: 0.0,
                         fat = fat.toDoubleOrNull() ?: 0.0,
                         carbohydrates = carbs.toDoubleOrNull() ?: 0.0,
-                        barcode = barcode.ifBlank { null }
+                        barcode = barcode.ifBlank { null },
+                        unitName = unitName,
+                        unitWeightG = unitWeightG.toDoubleOrNull()
                     )
                     onConfirm(updated)
                 },

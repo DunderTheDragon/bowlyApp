@@ -14,10 +14,12 @@ import androidx.compose.ui.unit.sp
 @Composable
 fun NutritionPanel(
     calories: Double, tCalories: Double,
+    bonusCalories: Double = 0.0,
     protein: Double, tProtein: Double,
     fat: Double, tFat: Double,
     carbs: Double, tCarbs: Double
 ) {
+    val effectiveTarget = (tCalories + bonusCalories).coerceAtLeast(1.0)
     Card(
         modifier = Modifier.fillMaxWidth().padding(start = 16.dp, end = 16.dp, top = 4.dp, bottom = 8.dp),
         elevation = CardDefaults.cardElevation(defaultElevation = 2.dp),
@@ -31,7 +33,7 @@ fun NutritionPanel(
             // Lewa strona: Kalorie
             Box(contentAlignment = Alignment.Center, modifier = Modifier.size(130.dp)) {
                 CircularProgressIndicator(
-                    progress = { (calories / tCalories).toFloat().coerceIn(0f, 1f) },
+                    progress = { (calories / effectiveTarget).toFloat().coerceIn(0f, 1f) },
                     modifier = Modifier.fillMaxSize(),
                     strokeWidth = 10.dp,
                     color = MaterialTheme.colorScheme.primary,
@@ -52,7 +54,11 @@ fun NutritionPanel(
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
                     Text(
-                        text = "cel: ${tCalories.toInt()}",
+                        text = if (bonusCalories > 0) {
+                            "cel: ${effectiveTarget.toInt()} (+${bonusCalories.toInt()})"
+                        } else {
+                            "cel: ${effectiveTarget.toInt()}"
+                        },
                         style = MaterialTheme.typography.labelSmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f)
                     )

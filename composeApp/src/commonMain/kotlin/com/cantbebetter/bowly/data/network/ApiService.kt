@@ -32,14 +32,6 @@ class ApiService(private val baseUrl: String, private val token: String? = null)
         return client.get("$baseUrl/api/system/status").body()
     }
 
-    suspend fun setupAdmin(request: SetupRequest): Boolean {
-        val response = client.post("$baseUrl/api/system/setup") {
-            contentType(ContentType.Application.Json)
-            setBody(request)
-        }
-        return response.status.isSuccess()
-    }
-
     suspend fun login(request: LoginRequest): LoginResponse {
         return client.post("$baseUrl/api/auth/login") {
             contentType(ContentType.Application.Json)
@@ -90,16 +82,22 @@ class ApiService(private val baseUrl: String, private val token: String? = null)
         }.body()
     }
 
-    suspend fun updateUserProfile(user: UserDto): Boolean {
-        val response = client.put("$baseUrl/api/users/profile") {
+    suspend fun updateUserProfile(user: UserDto): UserDto {
+        return client.put("$baseUrl/api/users/profile") {
             auth()
             contentType(ContentType.Application.Json)
             setBody(user)
-        }
-        return response.status.isSuccess()
+        }.body()
     }
 
     // Products
+    suspend fun searchExternalProducts(query: String): List<ProductDto> {
+        return client.get("$baseUrl/api/products/search/external") {
+            auth()
+            parameter("query", query)
+        }.body()
+    }
+
     suspend fun searchProducts(query: String): List<ProductDto> {
         return client.get("$baseUrl/api/products/search") {
             auth()
@@ -107,11 +105,38 @@ class ApiService(private val baseUrl: String, private val token: String? = null)
         }.body()
     }
 
-    suspend fun addLocalProduct(product: ProductDto): ProductDto {
+    suspend fun getProductByBarcode(barcode: String): ProductDto? {
+        return try {
+            client.get("$baseUrl/api/products/barcode/$barcode") {
+                auth()
+            }.body()
+        } catch (e: ResponseException) {
+            if (e.response.status == HttpStatusCode.NotFound) {
+                null
+            } else {
+                throw e
+            }
+        } catch (e: Exception) {
+            // Fallback for Compose Multiplatform where specific exceptions might get wrapped
+            if (e.message?.contains("404") == true) {
+                null
+            } else {
+                throw e
+            }
+        }
+    }
+
+    suspend fun saveLocalProduct(product: ProductDto): ProductDto {
         return client.post("$baseUrl/api/products/local") {
             auth()
             contentType(ContentType.Application.Json)
             setBody(product)
+        }.body()
+    }
+
+    suspend fun getLocalProducts(): List<ProductDto> {
+        return client.get("$baseUrl/api/products/local") {
+            auth()
         }.body()
     }
 
@@ -128,6 +153,13 @@ class ApiService(private val baseUrl: String, private val token: String? = null)
             contentType(ContentType.Application.Json)
             setBody(request)
         }.body()
+    }
+
+    suspend fun deleteBatchMeal(id: Long): Boolean {
+        val response = client.delete("$baseUrl/api/batch-meals/$id") {
+            auth()
+        }
+        return response.status.isSuccess()
     }
 
     suspend fun consumePortion(request: ConsumePortionRequest): Boolean {
@@ -165,25 +197,38 @@ class ApiService(private val baseUrl: String, private val token: String? = null)
     }
 
     // Recipes
-    suspend fun getRecipes(): List<RecipeDto> {
+    suspend fun getRecipes(scope: String = "MINE", singleMeal: Boolean? = null, query: String? = null): List<RecipeDto> {
         return client.get("$baseUrl/api/recipes") {
             auth()
-        }.body()
+            parameter("scope", scope)
+            query?.takeIf { it.isNotBlank() }?.let { parameter("query", it) }
+            singleMeal?.let { parameter("singleMeal", it) }
+        }.body<List<ApiMealRecipeDto>>().map { it.toRecipeDto() }
     }
 
-    suspend fun searchRecipes(query: String): List<RecipeDto> {
+    suspend fun searchRecipes(query: String, scope: String = "MINE", singleMeal: Boolean? = null): List<RecipeDto> {
         return client.get("$baseUrl/api/recipes/search") {
             auth()
             parameter("query", query)
-        }.body()
+            parameter("scope", scope)
+            singleMeal?.let { parameter("singleMeal", it) }
+        }.body<List<ApiMealRecipeDto>>().map { it.toRecipeDto() }
     }
 
     suspend fun saveRecipe(recipe: RecipeDto): RecipeDto {
         return client.post("$baseUrl/api/recipes") {
             auth()
             contentType(ContentType.Application.Json)
-            setBody(recipe)
-        }.body()
+            setBody(recipe.toCreateRequest())
+        }.body<ApiMealRecipeDto>().toRecipeDto()
+    }
+
+    suspend fun updateRecipe(id: String, recipe: RecipeDto): RecipeDto {
+        return client.put("$baseUrl/api/recipes/$id") {
+            auth()
+            contentType(ContentType.Application.Json)
+            setBody(recipe.toCreateRequest())
+        }.body<ApiMealRecipeDto>().toRecipeDto()
     }
 
     suspend fun deleteRecipe(id: String): Boolean {
@@ -199,6 +244,22 @@ class ApiService(private val baseUrl: String, private val token: String? = null)
             auth()
             parameter("date", date)
         }.body()
+    }
+
+    // Workouts
+    suspend fun addWorkout(request: CreateWorkoutActivityRequest): WorkoutActivityDto {
+        return client.post("$baseUrl/api/workouts") {
+            auth()
+            contentType(ContentType.Application.Json)
+            setBody(request)
+        }.body()
+    }
+
+    suspend fun deleteWorkout(id: Long): Boolean {
+        val response = client.delete("$baseUrl/api/workouts/$id") {
+            auth()
+        }
+        return response.status.isSuccess()
     }
 
     fun close() {

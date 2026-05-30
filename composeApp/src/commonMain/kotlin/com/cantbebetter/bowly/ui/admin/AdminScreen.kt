@@ -4,7 +4,7 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.ArrowBack
+import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.PersonAdd
 import androidx.compose.material.icons.filled.VpnKey
@@ -47,7 +47,7 @@ fun AdminScreen(
                 title = { Text("Panel Administratora") },
                 navigationIcon = {
                     IconButton(onClick = onBack) {
-                        Icon(Icons.Default.ArrowBack, contentDescription = "Powrót")
+                        Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Powrót")
                     }
                 }
             )
@@ -158,8 +158,8 @@ fun UsersSection(
     if (showAddDialog) {
         AddUserDialog(
             onDismiss = { showAddDialog = false },
-            onConfirm = { username, password ->
-                onAddUser(RegisterRequest(username, password))
+            onConfirm = { username, password, secret ->
+                onAddUser(RegisterRequest(username, password, secret))
                 showAddDialog = false
             }
         )
@@ -193,10 +193,11 @@ fun UsersSection(
 @Composable
 fun AddUserDialog(
     onDismiss: () -> Unit,
-    onConfirm: (String, String) -> Unit
+    onConfirm: (String, String, String) -> Unit
 ) {
     var username by remember { mutableStateOf("") }
     var password by remember { mutableStateOf("") }
+    var secret by remember { mutableStateOf("") }
 
     val isUsernameValid = username.length in 3..50
     val isPasswordValid = password.length >= 6
@@ -226,12 +227,18 @@ fun AddUserDialog(
                         Text("Minimum 6 znaków")
                     }
                 )
+                OutlinedTextField(
+                    value = secret,
+                    onValueChange = { secret = it },
+                    label = { Text("Registration Secret") },
+                    modifier = Modifier.fillMaxWidth()
+                )
             }
         },
         confirmButton = {
             TextButton(
-                onClick = { onConfirm(username, password) },
-                enabled = isUsernameValid && isPasswordValid
+                onClick = { onConfirm(username, password, secret) },
+                enabled = isUsernameValid && isPasswordValid && secret.isNotBlank()
             ) {
                 Text("Dodaj")
             }
