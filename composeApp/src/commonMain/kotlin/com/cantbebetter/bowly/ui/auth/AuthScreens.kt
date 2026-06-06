@@ -2,11 +2,16 @@ package com.cantbebetter.bowly.ui.auth
 
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.text.KeyboardActions
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalFocusManager
+import androidx.compose.ui.platform.LocalSoftwareKeyboardController
+import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
 import com.cantbebetter.bowly.data.network.LoginRequest
@@ -16,9 +21,11 @@ import com.cantbebetter.bowly.ui.viewmodels.MainViewModel
 @Composable
 fun ServerAddressScreen(
     error: String? = null,
-    onSetAddress: (String) -> Unit
+    initialAddress: String? = null,
+    onSetAddress: (String) -> Unit,
+    onCancel: (() -> Unit)? = null
 ) {
-    var url by remember { mutableStateOf("") }
+    var url by remember(initialAddress) { mutableStateOf(initialAddress.orEmpty()) }
 
     Column(
         modifier = Modifier.fillMaxSize().padding(16.dp),
@@ -27,13 +34,20 @@ fun ServerAddressScreen(
     ) {
         Text("Połącz z serwerem Bowly", style = MaterialTheme.typography.headlineSmall)
         Spacer(modifier = Modifier.height(8.dp))
-        Text("Wprowadź adres IP (np. 192.168.1.10:8080)", style = MaterialTheme.typography.bodySmall)
+        Text(
+            if (initialAddress.isNullOrBlank()) {
+                "Wprowadź adres IP (np. 192.168.1.10:8742)"
+            } else {
+                "Edytuj adres serwera Bowly"
+            },
+            style = MaterialTheme.typography.bodySmall
+        )
         Spacer(modifier = Modifier.height(16.dp))
         OutlinedTextField(
             value = url,
             onValueChange = { url = it },
             label = { Text("Adres serwera") },
-            placeholder = { Text("http://") },
+            placeholder = { Text("http://192.168.1.10:8742") },
             modifier = Modifier.fillMaxWidth(),
             isError = error != null,
             singleLine = true
@@ -50,6 +64,11 @@ fun ServerAddressScreen(
         Button(onClick = { onSetAddress(url.trim().trimEnd('/')) }) {
             Text("Połącz")
         }
+        if (onCancel != null) {
+            TextButton(onClick = onCancel) {
+                Text("Wróć do logowania")
+            }
+        }
     }
 }
 
@@ -57,6 +76,7 @@ fun ServerAddressScreen(
 fun LoginScreen(
     viewModel: MainViewModel,
     error: String? = null,
+    serverAddress: String? = null,
     onLogin: (LoginRequest) -> Unit,
     onRegister: (RegisterRequest) -> Unit,
     onChangeServer: () -> Unit
@@ -70,6 +90,24 @@ fun LoginScreen(
 
     val scrollState = rememberScrollState()
     val registrationSuccess by viewModel.registrationSuccess.collectAsState()
+    val focusManager = LocalFocusManager.current
+    val keyboardController = LocalSoftwareKeyboardController.current
+
+    fun submitAuth() {
+        focusManager.clearFocus()
+        keyboardController?.hide()
+        if (isRegisterMode) {
+            onRegister(RegisterRequest(username, password, registrationSecret))
+        } else {
+            onLogin(LoginRequest(username, password))
+        }
+    }
+
+    val canSubmit = if (isRegisterMode) {
+        username.isNotBlank() && password.isNotBlank() && password == confirmPassword && registrationSecret.isNotBlank()
+    } else {
+        username.isNotBlank() && password.isNotBlank()
+    }
 
     LaunchedEffect(registrationSuccess) {
         if (registrationSuccess) {
@@ -84,15 +122,24 @@ fun LoginScreen(
         verticalArrangement = Arrangement.Center
     ) {
         Text(if (isRegisterMode) "Rejestracja" else "Logowanie", style = MaterialTheme.typography.headlineSmall)
+        if (!serverAddress.isNullOrBlank()) {
+            Spacer(modifier = Modifier.height(8.dp))
+            Text(
+                "Serwer: $serverAddress",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+        }
         Spacer(modifier = Modifier.height(16.dp))
         
         OutlinedTextField(
             value = username,
             onValueChange = { username = it },
             label = { Text("Login") },
-            modifier = Modifier.fillMaxWidth(),
+            modifier = Modifier.fillMaxWidth().usernameField(),
             isError = error != null,
-            singleLine = true
+            singleLine = true,
+            keyboardOptions = KeyboardOptions(imeAction = ImeAction.Next)
         )
         
         Spacer(modifier = Modifier.height(8.dp))
@@ -101,9 +148,13 @@ fun LoginScreen(
             onValueChange = { password = it },
             label = { Text("Hasło") },
             visualTransformation = PasswordVisualTransformation(),
-            modifier = Modifier.fillMaxWidth(),
+            modifier = Modifier.fillMaxWidth().passwordField(),
             isError = error != null,
-            singleLine = true
+            singleLine = true,
+            keyboardOptions = KeyboardOptions(imeAction = ImeAction.Done),
+            keyboardActions = KeyboardActions(onDone = {
+                if (canSubmit) submitAuth()
+            })
         )
 
         if (isRegisterMode) {
@@ -141,19 +192,9 @@ fun LoginScreen(
         Spacer(modifier = Modifier.height(16.dp))
         
         Button(
-            onClick = { 
-                if (isRegisterMode) {
-                    onRegister(RegisterRequest(username, password, registrationSecret))
-                } else {
-                    onLogin(LoginRequest(username, password))
-                }
-            },
+            onClick = { submitAuth() },
             modifier = Modifier.fillMaxWidth(),
-            enabled = if (isRegisterMode) {
-                username.isNotBlank() && password.isNotBlank() && password == confirmPassword && registrationSecret.isNotBlank()
-            } else {
-                username.isNotBlank() && password.isNotBlank()
-            }
+            enabled = canSubmit
         ) {
             Text(if (isRegisterMode) "Zarejestruj się" else "Zaloguj")
         }

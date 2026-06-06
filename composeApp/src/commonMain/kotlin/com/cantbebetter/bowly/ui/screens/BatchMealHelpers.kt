@@ -2,6 +2,9 @@ package com.cantbebetter.bowly.ui.screens
 
 import com.cantbebetter.bowly.data.network.BatchMealDto
 import com.cantbebetter.bowly.data.network.BatchMealSegmentDto
+import com.cantbebetter.bowly.data.network.CreateBatchMealRequest
+import com.cantbebetter.bowly.data.network.CreateBatchMealSegmentRequest
+import com.cantbebetter.bowly.data.network.RecipeDto
 
 fun BatchMealSegmentDto.remainingKcal(): Double {
     if (initialWeightG <= 0) return 0.0
@@ -49,3 +52,54 @@ data class SegmentMacros(
     val totalFat: Double,
     val totalCarbs: Double
 )
+
+fun List<SectionData>.toCreateBatchMealSegments(mealName: String): List<CreateBatchMealSegmentRequest> =
+    mapNotNull { section ->
+        if (section.products.isEmpty()) return@mapNotNull null
+        val totalWeight = section.products.sumOf { it.weightG }
+        if (totalWeight <= 0) return@mapNotNull null
+        val primaryProduct = section.products.first().product
+        val macros = sectionMacrosFromProducts(section.products)
+        CreateBatchMealSegmentRequest(
+            name = section.name.ifBlank { mealName },
+            productId = primaryProduct.id,
+            product = primaryProduct,
+            products = section.products.map { it.product },
+            initialWeightG = totalWeight.sanitizeApiDouble(),
+            totalKcal = macros.totalKcal.sanitizeApiDouble(),
+            totalProtein = macros.totalProtein.sanitizeApiDouble(),
+            totalFat = macros.totalFat.sanitizeApiDouble(),
+            totalCarbs = macros.totalCarbs.sanitizeApiDouble()
+        )
+    }
+
+fun buildCreateBatchMealRequest(
+    mealName: String,
+    sections: List<SectionData>,
+    saveAsRecipe: Boolean,
+    initialRecipe: RecipeDto? = null,
+    initialMeal: BatchMealDto? = null
+): CreateBatchMealRequest {
+    val shouldSaveRecipe = saveAsRecipe && initialRecipe == null && initialMeal == null
+    return CreateBatchMealRequest(
+        name = mealName.trim(),
+        saveAsRecipe = shouldSaveRecipe,
+        recipeSections = if (shouldSaveRecipe) sections.toRecipeSectionsForSave() else emptyList(),
+        segments = sections.toCreateBatchMealSegments(mealName)
+    )
+}
+
+fun validateBatchMealSections(sections: List<SectionData>): String? {
+    val hasWeightedProducts = sections.any { section ->
+        section.products.isNotEmpty() && section.products.sumOf { it.weightG } > 0
+    }
+    if (!hasWeightedProducts) {
+        return "Dodaj co najmniej jedną sekcję ze składnikami i podaj wagę większą od 0 g"
+    }
+    return null
+}
+
+private fun Double.sanitizeApiDouble(): Double = when {
+    isNaN() || isInfinite() -> 0.0
+    else -> this
+}

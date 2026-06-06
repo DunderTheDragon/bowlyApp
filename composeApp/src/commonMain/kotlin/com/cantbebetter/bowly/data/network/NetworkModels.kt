@@ -1,5 +1,7 @@
 package com.cantbebetter.bowly.data.network
 
+import kotlinx.serialization.EncodeDefault
+import kotlinx.serialization.ExperimentalSerializationApi
 import kotlinx.serialization.Serializable
 
 @Serializable
@@ -115,18 +117,22 @@ data class BatchMealSegmentDto(
     val product: ProductDto?,
     val initialWeightG: Double,
     val currentWeightG: Double,
+    val rawWeightG: Double? = null,
     val totalKcal: Double,
     val totalProtein: Double,
     val totalFat: Double,
     val totalCarbs: Double
 )
 
+@OptIn(ExperimentalSerializationApi::class)
 @Serializable
 data class CreateBatchMealRequest(
     val name: String,
     val recipeId: Long? = null,
+    @EncodeDefault(EncodeDefault.Mode.ALWAYS)
     val saveAsRecipe: Boolean = false,
-    val recipeSections: List<CreateRecipeSectionApiRequest>? = null,
+    @EncodeDefault(EncodeDefault.Mode.ALWAYS)
+    val recipeSections: List<CreateRecipeSectionApiRequest> = emptyList(),
     val segments: List<CreateBatchMealSegmentRequest>
 )
 
@@ -207,4 +213,34 @@ data class ConsumedPortionDto(
     val protein: Double,
     val fat: Double,
     val carbs: Double
+)
+
+@Serializable
+data class UpdateSegmentCookedWeightRequest(
+    val cookedWeightG: Double
+)
+
+@Serializable
+data class WeighingContainerDto(
+    val id: Long,
+    val name: String,
+    val type: String,
+    val weightG: Double,
+    val imageBase64: String? = null
+)
+
+@Serializable
+data class CreateWeighingContainerRequest(
+    val name: String,
+    val type: String,
+    val weightG: Double,
+    val imageBase64: String? = null
+)
+
+@Serializable
+data class UpdateWeighingContainerRequest(
+    val name: String,
+    val type: String,
+    val weightG: Double,
+    val imageBase64: String? = null
 )

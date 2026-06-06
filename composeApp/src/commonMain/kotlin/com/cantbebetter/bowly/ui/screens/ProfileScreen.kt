@@ -11,6 +11,7 @@ import androidx.compose.material.icons.automirrored.filled.List
 import androidx.compose.material.icons.filled.ChevronRight
 import androidx.compose.material.icons.filled.DarkMode
 import androidx.compose.material.icons.filled.LightMode
+import androidx.compose.material.icons.filled.Kitchen
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -35,6 +36,7 @@ private val activityLevels = listOf(
 fun ProfileScreen(
     viewModel: MainViewModel,
     onMyProductsClick: () -> Unit,
+    onMyContainersClick: () -> Unit,
     onAdminPanelClick: () -> Unit,
     onLogoutClick: () -> Unit
 ) {
@@ -107,6 +109,26 @@ fun ProfileScreen(
                     Icon(Icons.AutoMirrored.Filled.List, null)
                     Spacer(modifier = Modifier.width(12.dp))
                     Text("Moje produkty i przepisy", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
+                }
+                Icon(Icons.Default.ChevronRight, null)
+            }
+        }
+
+        Spacer(modifier = Modifier.height(12.dp))
+
+        Card(
+            modifier = Modifier.fillMaxWidth().clickable { onMyContainersClick() },
+            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.secondaryContainer.copy(alpha = 0.5f))
+        ) {
+            Row(
+                modifier = Modifier.padding(16.dp).fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Icon(Icons.Default.Kitchen, null)
+                    Spacer(modifier = Modifier.width(12.dp))
+                    Text("Moje naczynia (tara)", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
                 }
                 Icon(Icons.Default.ChevronRight, null)
             }

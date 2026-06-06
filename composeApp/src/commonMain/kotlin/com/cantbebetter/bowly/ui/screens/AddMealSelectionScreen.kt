@@ -30,7 +30,19 @@ import androidx.compose.ui.window.DialogProperties
 import com.cantbebetter.bowly.data.network.*
 import com.cantbebetter.bowly.models.*
 import com.cantbebetter.bowly.ui.components.BarcodeScannerView
+import com.cantbebetter.bowly.ui.components.TareWeightSelector
+import com.cantbebetter.bowly.ui.components.resolveNetWeight
 import com.cantbebetter.bowly.ui.viewmodels.MainViewModel
+
+private fun gramWeightFromInput(
+    grossText: String,
+    tareEnabled: Boolean,
+    containerId: Long?,
+    containers: List<WeighingContainerDto>
+): Double {
+    if (!tareEnabled) return grossText.toDoubleOrNull() ?: 0.0
+    return resolveNetWeight(true, grossText, containerId, containers) ?: 0.0
+}
 
 @Composable
 fun AddMealSelectionScreen(
@@ -388,6 +400,11 @@ fun ProductAddDetail(
     var unitType by remember { 
         mutableStateOf("g")
     }
+    var tareEnabled by remember { mutableStateOf(false) }
+    var selectedContainerId by remember { mutableStateOf<Long?>(null) }
+    val containers by viewModel.containers.collectAsState()
+
+    LaunchedEffect(Unit) { viewModel.loadContainers() }
 
     val currentAmount = amountText.toDoubleOrNull() ?: 0.0
     
@@ -395,7 +412,11 @@ fun ProductAddDetail(
     val unitWeightG = product.unitWeightG ?: 100.0
     val unitName = product.unitName ?: "szt"
     
-    val finalWeight = if (unitType == "unit") currentAmount * unitWeightG else currentAmount
+    val finalWeight = when {
+        unitType == "unit" -> currentAmount * unitWeightG
+        tareEnabled -> resolveNetWeight(true, amountText, selectedContainerId, containers) ?: 0.0
+        else -> currentAmount
+    }
     
     val calculatedCals = (finalWeight / 100.0) * product.calories
     val calculatedProtein = (finalWeight / 100.0) * product.protein
@@ -468,6 +489,20 @@ fun ProductAddDetail(
                     }
                 }
             }
+        }
+        
+        if (unitType == "g") {
+            Spacer(modifier = Modifier.height(16.dp))
+            TareWeightSelector(
+                containers = containers,
+                enabled = tareEnabled,
+                onEnabledChange = { tareEnabled = it },
+                selectedContainerId = selectedContainerId,
+                onContainerSelected = { selectedContainerId = it },
+                grossWeightText = amountText,
+                onGrossWeightChange = { amountText = it },
+                showGrossInput = false
+            )
         }
         
         Spacer(modifier = Modifier.weight(1f))
@@ -549,6 +584,11 @@ fun BatchMealAddDetail(
     val mealTypes = listOf("Śniadanie", "Drugie śniadanie", "Obiad", "Podwieczorek", "Kolacja", "Inne")
     var selectedMealType by remember { mutableStateOf(initialMealType) }
     var expandedMealDropdown by remember { mutableStateOf(false) }
+    var tareEnabled by remember { mutableStateOf(false) }
+    var selectedContainerId by remember { mutableStateOf<Long?>(null) }
+    val containers by viewModel.containers.collectAsState()
+
+    LaunchedEffect(Unit) { viewModel.loadContainers() }
 
     val datePickerState = rememberDatePickerState(
         initialSelectedDateMillis = selectedTimestamp
@@ -561,13 +601,28 @@ fun BatchMealAddDetail(
         }
     }
 
-    Column(modifier = Modifier.fillMaxSize().padding(16.dp).verticalScroll(rememberScrollState())) {
-        Row(verticalAlignment = Alignment.CenterVertically) {
+    val scrollState = rememberScrollState()
+
+    Column(modifier = Modifier.fillMaxSize()) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 4.dp, vertical = 8.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
             IconButton(onClick = onBack) { Icon(Icons.AutoMirrored.Filled.ArrowBack, null) }
             Text(batchMeal.name, style = MaterialTheme.typography.titleLarge)
         }
 
-        Spacer(modifier = Modifier.height(16.dp))
+        Column(
+            modifier = Modifier
+                .weight(1f)
+                .fillMaxWidth()
+                .verticalScroll(scrollState)
+                .padding(horizontal = 16.dp)
+                .padding(bottom = 16.dp)
+        ) {
+        Spacer(modifier = Modifier.height(8.dp))
 
         Text("Jak odmierzasz posiłek?", style = MaterialTheme.typography.titleMedium)
         Row(modifier = Modifier.padding(vertical = 8.dp)) {
@@ -598,19 +653,32 @@ fun BatchMealAddDetail(
             keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number)
         )
 
+        if (mode == "g") {
+            TareWeightSelector(
+                containers = containers,
+                enabled = tareEnabled,
+                onEnabledChange = { tareEnabled = it },
+                selectedContainerId = selectedContainerId,
+                onContainerSelected = { selectedContainerId = it },
+                grossWeightText = commonValueText,
+                onGrossWeightChange = { commonValueText = it },
+                modifier = Modifier.padding(top = 8.dp),
+                showGrossInput = false
+            )
+        }
+
         Text(
             "Wartości poszczególnych sekcji:",
             style = MaterialTheme.typography.labelSmall,
             modifier = Modifier.padding(top = 16.dp, bottom = 8.dp)
         )
 
-        Column(modifier = Modifier.weight(1f, fill = false)) {
-            batchMeal.segments.forEach { segment ->
+        batchMeal.segments.forEach { segment ->
                 val segmentValue = segmentsValues[segment.id] ?: ""
                 val assignedWeight = if (mode == "percent") {
                     ((segmentValue.toDoubleOrNull() ?: 0.0) / 100.0) * segment.currentWeightG
                 } else {
-                    segmentValue.toDoubleOrNull() ?: 0.0
+                    gramWeightFromInput(segmentValue, tareEnabled, selectedContainerId, containers)
                 }
                 val maxWeight = segment.currentWeightG
                 val remainingAfter = (maxWeight - assignedWeight).coerceAtLeast(0.0)
@@ -684,8 +752,7 @@ fun BatchMealAddDetail(
                     }
                 }
             }
-        }
-        
+
         Spacer(modifier = Modifier.height(16.dp))
         
         if (isPredefined) {
@@ -755,7 +822,7 @@ fun BatchMealAddDetail(
                         val weight = if (mode == "percent") {
                             (value / 100.0) * segment.currentWeightG
                         } else {
-                            value
+                            gramWeightFromInput(segmentsValues[segment.id] ?: "", tareEnabled, selectedContainerId, containers)
                         }
                         if (weight <= 0 || weight > segment.currentWeightG) return@mapNotNull null
                         segment.id to weight
@@ -778,7 +845,7 @@ fun BatchMealAddDetail(
                     val weight = if (mode == "percent") {
                         (value / 100.0) * segment.currentWeightG
                     } else {
-                        value
+                        gramWeightFromInput(segmentsValues[segment.id] ?: "", tareEnabled, selectedContainerId, containers)
                     }
                     if (weight <= 0 || weight > segment.currentWeightG) return@forEach
                     
@@ -798,11 +865,16 @@ fun BatchMealAddDetail(
             enabled = batchMeal.segments.any { segment ->
                 val value = segmentsValues[segment.id]?.toDoubleOrNull() ?: 0.0
                 if (value <= 0) return@any false
-                val weight = if (mode == "percent") (value / 100.0) * segment.currentWeightG else value
+                val weight = if (mode == "percent") {
+                    (value / 100.0) * segment.currentWeightG
+                } else {
+                    gramWeightFromInput(segmentsValues[segment.id] ?: "", tareEnabled, selectedContainerId, containers)
+                }
                 weight > 0 && weight <= segment.currentWeightG
             }
         ) {
             Text("Dodaj wybrane części")
+        }
         }
     }
     

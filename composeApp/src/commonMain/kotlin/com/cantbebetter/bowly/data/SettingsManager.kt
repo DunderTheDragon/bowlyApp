@@ -49,4 +49,10 @@ class SettingsManager(private val settings: Settings = Settings()) {
     fun clear() {
         settings.clear()
     }
+
+    fun clearSession() {
+        token = null
+        username = null
+        role = null
+    }
 }

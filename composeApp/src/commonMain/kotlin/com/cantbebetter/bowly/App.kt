@@ -10,6 +10,7 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
+import androidx.lifecycle.compose.LifecycleResumeEffect
 import com.cantbebetter.bowly.ui.screens.*
 import com.cantbebetter.bowly.data.SettingsManager
 import com.cantbebetter.bowly.data.network.ConsumedPortionDto
@@ -20,7 +21,7 @@ import com.cantbebetter.bowly.ui.viewmodels.AppState
 import com.cantbebetter.bowly.ui.viewmodels.MainViewModel
 
 enum class Screen {
-    Dashboard, BatchMeals, Profile, AddMealSelection, MyProducts, Admin
+    Dashboard, BatchMeals, Profile, AddMealSelection, MyProducts, MyContainers, Admin
 }
 
 @Composable
@@ -51,18 +52,26 @@ fun App() {
                     }
                 }
                 is AppState.EnterServerAddress -> {
+                    val currentAddress = viewModel.currentServerAddress
                     ServerAddressScreen(
                         error = error,
-                        onSetAddress = { viewModel.setServerAddress(it) }
+                        initialAddress = currentAddress,
+                        onSetAddress = { viewModel.setServerAddress(it) },
+                        onCancel = if (!currentAddress.isNullOrBlank()) {
+                            { viewModel.cancelChangeServerAddress() }
+                        } else {
+                            null
+                        }
                     )
                 }
                 is AppState.LoginRequired -> {
                     LoginScreen(
                         viewModel = viewModel,
                         error = error,
+                        serverAddress = viewModel.currentServerAddress,
                         onLogin = { viewModel.login(it) },
                         onRegister = { viewModel.registerUser(it) },
-                        onChangeServer = { viewModel.setServerAddress("") }
+                        onChangeServer = { viewModel.openChangeServerAddress() }
                     )
                 }
                 is AppState.Authenticated -> {
@@ -77,18 +86,35 @@ fun App() {
 fun MainAppContent(viewModel: MainViewModel, settingsManager: SettingsManager) {
     var currentScreen by remember { mutableStateOf(Screen.Dashboard) }
     var activeMealName by remember { mutableStateOf("Inne") }
-    var activeDate by remember { mutableStateOf(Clock.formatToApiDate(Clock.now())) }
+    var activeDate by remember { mutableStateOf(Clock.todayApiDate()) }
     var editingMeal by remember { mutableStateOf<ConsumedPortionDto?>(null) }
     var dayOffset by remember { mutableStateOf(0) }
+    var lastKnownToday by remember { mutableStateOf(Clock.todayApiDate()) }
+    var hasHandledResume by remember { mutableStateOf(false) }
 
     LaunchedEffect(Unit) {
         viewModel.loadUserProfile()
-        viewModel.loadDailySummary(Clock.formatToApiDate(Clock.now()))
+        viewModel.loadDailySummary(Clock.todayApiDate())
+    }
+
+    LifecycleResumeEffect(Unit) {
+        if (hasHandledResume) {
+            val today = Clock.todayApiDate()
+            if (today != lastKnownToday) {
+                lastKnownToday = today
+                dayOffset = 0
+                activeDate = today
+                viewModel.loadDailySummary(today)
+            }
+        } else {
+            hasHandledResume = true
+        }
+        onPauseOrDispose { }
     }
 
     Scaffold(
         bottomBar = {
-            if (currentScreen != Screen.Admin && currentScreen != Screen.MyProducts && currentScreen != Screen.AddMealSelection) {
+            if (currentScreen != Screen.Admin && currentScreen != Screen.MyProducts && currentScreen != Screen.MyContainers && currentScreen != Screen.AddMealSelection) {
                 NavigationBar {
                     NavigationBarItem(
                         icon = { Icon(Icons.Default.Home, contentDescription = "Home") },
@@ -112,7 +138,7 @@ fun MainAppContent(viewModel: MainViewModel, settingsManager: SettingsManager) {
             }
         }
     ) { innerPadding ->
-        Surface(modifier = Modifier.padding(if (currentScreen == Screen.Admin || currentScreen == Screen.MyProducts || currentScreen == Screen.AddMealSelection) PaddingValues(0.dp) else innerPadding)) {
+        Surface(modifier = Modifier.padding(if (currentScreen == Screen.Admin || currentScreen == Screen.MyProducts || currentScreen == Screen.MyContainers || currentScreen == Screen.AddMealSelection) PaddingValues(0.dp) else innerPadding)) {
             when (currentScreen) {
                 Screen.Dashboard -> DashboardScreen(
                     viewModel = viewModel,
@@ -144,10 +170,15 @@ fun MainAppContent(viewModel: MainViewModel, settingsManager: SettingsManager) {
                 Screen.Profile -> ProfileScreen(
                     viewModel = viewModel,
                     onMyProductsClick = { currentScreen = Screen.MyProducts },
+                    onMyContainersClick = { currentScreen = Screen.MyContainers },
                     onAdminPanelClick = { currentScreen = Screen.Admin },
                     onLogoutClick = { viewModel.logout() }
                 )
                 Screen.MyProducts -> MyProductsScreen(
+                    viewModel = viewModel,
+                    onBack = { currentScreen = Screen.Profile }
+                )
+                Screen.MyContainers -> MyContainersScreen(
                     viewModel = viewModel,
                     onBack = { currentScreen = Screen.Profile }
                 )

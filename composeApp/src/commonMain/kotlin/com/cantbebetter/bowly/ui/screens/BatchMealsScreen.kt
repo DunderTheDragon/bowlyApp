@@ -37,6 +37,8 @@ import com.cantbebetter.bowly.ui.components.BarcodeScannerView
 import com.cantbebetter.bowly.data.network.*
 import com.cantbebetter.bowly.models.MealTypeMapper
 import com.cantbebetter.bowly.ui.viewmodels.MainViewModel
+import com.cantbebetter.bowly.ui.components.TareWeightSelector
+import com.cantbebetter.bowly.ui.components.resolveNetWeight
 
 data class SectionData(
     val id: String,
@@ -56,9 +58,19 @@ fun BatchMealsScreen(
     val activeMeals by viewModel.activeBatchMeals.collectAsState()
     var selectedMeal by remember { mutableStateOf<BatchMealDto?>(null) }
     var showCreateDialog by remember { mutableStateOf(false) }
+    var editingMeal by remember { mutableStateOf<BatchMealDto?>(null) }
     var personalizeRecipe by remember { mutableStateOf<com.cantbebetter.bowly.data.network.RecipeDto?>(null) }
     val userProfile by viewModel.userProfile.collectAsState()
     var showOnboarding by remember { mutableStateOf(userProfile?.showBatchOnboarding ?: false) }
+    val error by viewModel.error.collectAsState()
+    val snackbarHostState = remember { SnackbarHostState() }
+
+    LaunchedEffect(error) {
+        error?.let {
+            snackbarHostState.showSnackbar(it)
+            viewModel.clearError()
+        }
+    }
 
     // Synchronizacja showOnboarding z profilem
     LaunchedEffect(userProfile?.showBatchOnboarding) {
@@ -71,8 +83,12 @@ fun BatchMealsScreen(
     }
 
     Scaffold(
+        snackbarHost = { SnackbarHost(snackbarHostState) },
         floatingActionButton = {
-            FloatingActionButton(onClick = { showCreateDialog = true }) {
+            FloatingActionButton(onClick = {
+                viewModel.clearError()
+                showCreateDialog = true
+            }) {
                 Icon(Icons.Default.Add, contentDescription = "Dodaj patelnię")
             }
         }
@@ -138,6 +154,7 @@ fun BatchMealsScreen(
                     MealCard(
                         meal = meal,
                         onTakePortion = { selectedMeal = meal },
+                        onEdit = { editingMeal = meal },
                         onDelete = { viewModel.deleteBatchMeal(meal.id) }
                     )
                 }
@@ -169,13 +186,26 @@ fun BatchMealsScreen(
                     viewModel = viewModel,
                     batchMeal = selectedMeal!!,
                     initialMealType = "Obiad",
-                    initialDate = Clock.formatToApiDate(Clock.now()),
+                    initialDate = Clock.todayApiDate(),
                     isPredefined = false,
                     onBack = { selectedMeal = null },
                     onConfirm = { selectedMeal = null }
                 )
             }
         }
+    }
+
+    if (editingMeal != null) {
+        EditBatchMealDialog(
+            meal = editingMeal!!,
+            viewModel = viewModel,
+            onDismiss = { editingMeal = null },
+            onSave = { cookedWeights ->
+                viewModel.updateBatchMealCookedWeights(editingMeal!!, cookedWeights) {
+                    editingMeal = null
+                }
+            }
+        )
     }
 
     if (showCreateDialog) {
@@ -186,11 +216,9 @@ fun BatchMealsScreen(
                 showCreateDialog = false
                 personalizeRecipe = null
             },
-            onConfirm = { request ->
-                viewModel.createBatchMeal(request) {
-                    showCreateDialog = false
-                    personalizeRecipe = null
-                }
+            onSuccess = {
+                showCreateDialog = false
+                personalizeRecipe = null
             },
             onCreateFromRecipe = { recipe ->
                 viewModel.createBatchFromRecipe(recipe) {
@@ -267,7 +295,7 @@ fun CreateBatchMealDialog(
     initialRecipe: com.cantbebetter.bowly.data.network.RecipeDto? = null,
     viewModel: MainViewModel,
     onDismiss: () -> Unit,
-    onConfirm: (CreateBatchMealRequest) -> Unit,
+    onSuccess: () -> Unit,
     onCreateFromRecipe: (com.cantbebetter.bowly.data.network.RecipeDto) -> Unit
 ) {
     val keyboardController = androidx.compose.ui.platform.LocalSoftwareKeyboardController.current
@@ -278,6 +306,8 @@ fun CreateBatchMealDialog(
     var mealName by remember(initialRecipe, initialMeal) {
         mutableStateOf(initialRecipe?.name ?: initialMeal?.name ?: "")
     }
+    var dialogError by remember { mutableStateOf<String?>(null) }
+    var isSubmitting by remember { mutableStateOf(false) }
 
     val initialSections = remember(initialRecipe, initialMeal) {
         val list = mutableListOf<SectionData>()
@@ -304,31 +334,98 @@ fun CreateBatchMealDialog(
     val sections = remember { mutableStateListOf<SectionData>().apply { addAll(initialSections) } }
     var activeSectionIdForSearch by remember { mutableStateOf<String?>(null) }
 
-    val totalWeight = sections.sumOf { it.products.sumOf { p -> p.weightG } }
+    val totalWeight by remember {
+        derivedStateOf { sections.sumOf { section -> section.products.sumOf { it.weightG } } }
+    }
+    val canSubmit by remember {
+        derivedStateOf {
+            mealName.isNotBlank() &&
+                validateBatchMealSections(sections) == null &&
+                !isSubmitting
+        }
+    }
 
-    AlertDialog(
-        onDismissRequest = onDismiss,
-        modifier = Modifier.fillMaxWidth().fillMaxHeight(0.95f),
-        properties = androidx.compose.ui.window.DialogProperties(usePlatformDefaultWidth = false),
-        title = {
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                IconButton(onClick = onDismiss) { Icon(Icons.Default.Close, null) }
-                val title = when {
-                    initialRecipe != null -> "Personalizuj patelnię"
-                    initialMeal != null -> "Edytuj patelnię"
-                    else -> "Nowa patelnia"
-                }
-                Text(title, style = MaterialTheme.typography.titleLarge)
+    val scrollState = rememberScrollState()
+    val showSaveAsRecipeOption = initialRecipe == null && initialMeal == null && creationMode == "NEW"
+    val showSubmitButton = creationMode != "RECIPE" || initialRecipe != null || initialMeal != null
+
+    fun submitBatchMeal() {
+        keyboardController?.hide()
+        dialogError = null
+
+        val validationError = validateBatchMealSections(sections)
+        if (validationError != null) {
+            dialogError = validationError
+            return
+        }
+        if (mealName.isBlank()) {
+            dialogError = "Podaj nazwę patelni"
+            return
+        }
+
+        val request = buildCreateBatchMealRequest(
+            mealName = mealName,
+            sections = sections.toList(),
+            saveAsRecipe = saveAsRecipe,
+            initialRecipe = initialRecipe,
+            initialMeal = initialMeal
+        )
+        if (request.segments.isEmpty()) {
+            dialogError = "Dodaj co najmniej jedną sekcję ze składnikami i podaj wagę większą od 0 g"
+            return
+        }
+
+        isSubmitting = true
+        viewModel.createBatchMeal(
+            request = request,
+            onComplete = {
+                isSubmitting = false
+                onSuccess()
+            },
+            onError = { message ->
+                isSubmitting = false
+                dialogError = message
             }
-        },
-        text = {
-            Column(
-                modifier = Modifier.fillMaxWidth().padding(horizontal = 4.dp),
-                horizontalAlignment = Alignment.CenterHorizontally
-            ) {
+        )
+    }
+
+    Dialog(
+        onDismissRequest = onDismiss,
+        properties = DialogProperties(usePlatformDefaultWidth = false)
+    ) {
+        Surface(
+            modifier = Modifier
+                .fillMaxWidth()
+                .fillMaxHeight(0.92f),
+            shape = RoundedCornerShape(20.dp),
+            tonalElevation = 6.dp
+        ) {
+            Column(modifier = Modifier.fillMaxSize()) {
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(start = 4.dp, end = 16.dp, top = 8.dp, bottom = 4.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    IconButton(onClick = onDismiss) {
+                        Icon(Icons.Default.Close, contentDescription = "Zamknij")
+                    }
+                    val title = when {
+                        initialRecipe != null -> "Personalizuj patelnię"
+                        initialMeal != null -> "Edytuj patelnię"
+                        else -> "Nowa patelnia"
+                    }
+                    Text(title, style = MaterialTheme.typography.titleLarge, modifier = Modifier.weight(1f))
+                }
+
+                Column(
+                    modifier = Modifier
+                        .weight(1f)
+                        .verticalScroll(scrollState)
+                        .padding(horizontal = 16.dp)
+                        .padding(bottom = 8.dp),
+                    horizontalAlignment = Alignment.CenterHorizontally
+                ) {
                 if (initialRecipe == null && initialMeal == null) {
                     Row(
                         modifier = Modifier.fillMaxWidth().padding(bottom = 12.dp),
@@ -398,60 +495,55 @@ fun CreateBatchMealDialog(
 
                         Spacer(modifier = Modifier.height(8.dp))
 
-                        LazyColumn(
-                            modifier = Modifier.fillMaxWidth().heightIn(max = 450.dp),
-                            contentPadding = PaddingValues(top = 20.dp, bottom = 16.dp)
-                        ) {
-                            items(sections, key = { it.id }) { section ->
-                                var showDeleteConfirmation by remember { mutableStateOf(false) }
+                        sections.forEach { section ->
+                            var showDeleteConfirmation by remember(section.id) { mutableStateOf(false) }
 
-                                if (showDeleteConfirmation) {
-                                    AlertDialog(
-                                        onDismissRequest = { showDeleteConfirmation = false },
-                                        title = { Text("Usuń sekcję") },
-                                        text = { Text("Czy na pewno chcesz usunąć sekcję \"${section.name}\"?") },
-                                        confirmButton = {
-                                            TextButton(
-                                                onClick = {
-                                                    sections.remove(section)
-                                                    showDeleteConfirmation = false
-                                                }
-                                            ) {
-                                                Text("Usuń", color = MaterialTheme.colorScheme.error)
+                            if (showDeleteConfirmation) {
+                                AlertDialog(
+                                    onDismissRequest = { showDeleteConfirmation = false },
+                                    title = { Text("Usuń sekcję") },
+                                    text = { Text("Czy na pewno chcesz usunąć sekcję \"${section.name}\"?") },
+                                    confirmButton = {
+                                        TextButton(
+                                            onClick = {
+                                                sections.remove(section)
+                                                showDeleteConfirmation = false
                                             }
-                                        },
-                                        dismissButton = {
-                                            TextButton(onClick = { showDeleteConfirmation = false }) {
-                                                Text("Anuluj")
-                                            }
+                                        ) {
+                                            Text("Usuń", color = MaterialTheme.colorScheme.error)
                                         }
-                                    )
-                                }
-
-                                SectionItem(
-                                    section = section,
-                                    isOnlySection = sections.size == 1,
-                                    onNameChange = { newName ->
-                                        val index = sections.indexOf(section)
-                                        sections[index] = section.copy(name = newName)
                                     },
-                                    onRemoveSection = { showDeleteConfirmation = true },
-                                    onAddProductClick = { activeSectionIdForSearch = section.id },
-                                    onProductWeightChange = { productData, newWeight ->
-                                        val sectionIndex = sections.indexOf(section)
-                                        val productIndex = section.products.indexOf(productData)
-                                        val updatedProducts = section.products.toMutableList()
-                                        updatedProducts[productIndex] = productData.copy(weightG = newWeight)
-                                        sections[sectionIndex] = section.copy(products = updatedProducts)
-                                    },
-                                    onRemoveProduct = { productData ->
-                                        val sectionIndex = sections.indexOf(section)
-                                        val updatedProducts = section.products.toMutableList()
-                                        updatedProducts.remove(productData)
-                                        sections[sectionIndex] = section.copy(products = updatedProducts)
+                                    dismissButton = {
+                                        TextButton(onClick = { showDeleteConfirmation = false }) {
+                                            Text("Anuluj")
+                                        }
                                     }
                                 )
                             }
+
+                            SectionItem(
+                                section = section,
+                                isOnlySection = sections.size == 1,
+                                onNameChange = { newName ->
+                                    val index = sections.indexOf(section)
+                                    sections[index] = section.copy(name = newName)
+                                },
+                                onRemoveSection = { showDeleteConfirmation = true },
+                                onAddProductClick = { activeSectionIdForSearch = section.id },
+                                onProductWeightChange = { productData, newWeight ->
+                                    val sectionIndex = sections.indexOf(section)
+                                    val productIndex = section.products.indexOf(productData)
+                                    val updatedProducts = section.products.toMutableList()
+                                    updatedProducts[productIndex] = productData.copy(weightG = newWeight)
+                                    sections[sectionIndex] = section.copy(products = updatedProducts)
+                                },
+                                onRemoveProduct = { productData ->
+                                    val sectionIndex = sections.indexOf(section)
+                                    val updatedProducts = section.products.toMutableList()
+                                    updatedProducts.remove(productData)
+                                    sections[sectionIndex] = section.copy(products = updatedProducts)
+                                }
+                            )
                         }
                     }
 
@@ -499,75 +591,61 @@ fun CreateBatchMealDialog(
                         )
                     }
                 }
+                }
+                }
 
-                if (initialRecipe == null && initialMeal == null && creationMode == "NEW") {
-                    Row(
-                        modifier = Modifier.fillMaxWidth().padding(top = 12.dp),
-                        verticalAlignment = Alignment.CenterVertically
+                if (showSubmitButton) {
+                    HorizontalDivider()
+                    Column(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 16.dp, vertical = 12.dp),
+                        verticalArrangement = Arrangement.spacedBy(10.dp)
                     ) {
-                        Checkbox(
-                            checked = saveAsRecipe,
-                            onCheckedChange = { saveAsRecipe = it }
-                        )
-                        Text(
-                            "Utwórz przepis",
-                            style = MaterialTheme.typography.bodyMedium,
-                            modifier = Modifier.clickable { saveAsRecipe = !saveAsRecipe }
-                        )
-                    }
-                }
-                }
-            }
-        },
-        confirmButton = {
-            if (creationMode != "RECIPE" || initialRecipe != null || initialMeal != null) {
-            Button(
-                onClick = {
-                    keyboardController?.hide()
-
-                    val shouldSaveRecipe = saveAsRecipe && initialRecipe == null && initialMeal == null
-                    val request = CreateBatchMealRequest(
-                        name = mealName,
-                        saveAsRecipe = shouldSaveRecipe,
-                        recipeSections = if (shouldSaveRecipe) sections.toRecipeSectionsForSave() else null,
-                        segments = sections.mapNotNull { section ->
-                            if (section.products.isEmpty()) return@mapNotNull null
-                            val totalWeight = section.products.sumOf { it.weightG }
-                            if (totalWeight <= 0) return@mapNotNull null
-                            val primaryProduct = section.products.first().product
-                            val macros = sectionMacrosFromProducts(section.products)
-                            CreateBatchMealSegmentRequest(
-                                name = section.name.ifBlank { mealName },
-                                productId = primaryProduct.id,
-                                product = primaryProduct,
-                                products = section.products.map { it.product },
-                                initialWeightG = totalWeight,
-                                totalKcal = macros.totalKcal,
-                                totalProtein = macros.totalProtein,
-                                totalFat = macros.totalFat,
-                                totalCarbs = macros.totalCarbs
+                        if (showSaveAsRecipeOption) {
+                            SaveAsRecipeOption(
+                                checked = saveAsRecipe,
+                                onCheckedChange = {
+                                    saveAsRecipe = it
+                                    dialogError = null
+                                }
                             )
                         }
-                    )
-                    onConfirm(request)
-                },
-                modifier = Modifier.fillMaxWidth().padding(horizontal = 24.dp, vertical = 8.dp),
-                shape = RoundedCornerShape(16.dp),
-                enabled = mealName.isNotBlank() && sections.any { it.products.isNotEmpty() && it.products.sumOf { p -> p.weightG } > 0 }
-            ) {
-                val confirmText = if (initialMeal != null) "Zapisz zmiany" else "Utwórz patelnię"
-                val totalKcal = sections.sumOf { sectionMacrosFromProducts(it.products).totalKcal }
-                Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                    Text(confirmText)
-                    Text(
-                        "Łącznie: ${totalWeight.toInt()}g · ${totalKcal.toInt()} kcal",
-                        style = MaterialTheme.typography.labelSmall
-                    )
+                        if (dialogError != null) {
+                            Text(
+                                text = dialogError!!,
+                                color = MaterialTheme.colorScheme.error,
+                                style = MaterialTheme.typography.bodySmall
+                            )
+                        }
+                        Button(
+                            onClick = { submitBatchMeal() },
+                            modifier = Modifier.fillMaxWidth(),
+                            shape = RoundedCornerShape(16.dp),
+                            enabled = canSubmit
+                        ) {
+                            val confirmText = if (initialMeal != null) "Zapisz zmiany" else "Utwórz patelnię"
+                            val totalKcal = sections.sumOf { sectionMacrosFromProducts(it.products).totalKcal }
+                            Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                                if (isSubmitting) {
+                                    CircularProgressIndicator(
+                                        modifier = Modifier.size(18.dp),
+                                        strokeWidth = 2.dp
+                                    )
+                                } else {
+                                    Text(confirmText)
+                                    Text(
+                                        "Łącznie: ${totalWeight.toInt()}g · ${totalKcal.toInt()} kcal",
+                                        style = MaterialTheme.typography.labelSmall
+                                    )
+                                }
+                            }
+                        }
+                    }
                 }
             }
-            }
         }
-    )
+    }
 
     if (activeSectionIdForSearch != null) {
         val currentActiveId = activeSectionIdForSearch 
@@ -580,19 +658,75 @@ fun CreateBatchMealDialog(
                     viewModel = viewModel,
                     onBack = { activeSectionIdForSearch = null },
                     onProductSelected = { product ->
-                        viewModel.cacheProduct(product) { saved ->
-                            val sectionIndex = sections.indexOfFirst { it.id == currentActiveId }
-                            if (sectionIndex != -1) {
-                                val section = sections[sectionIndex]
-                                val updatedProducts = section.products.toMutableList()
-                                updatedProducts.add(ProductData(product = saved, weightG = 0.0))
-                                sections[sectionIndex] = section.copy(products = updatedProducts)
+                        viewModel.cacheProduct(
+                            product = product,
+                            onResult = { saved ->
+                                val sectionIndex = sections.indexOfFirst { it.id == currentActiveId }
+                                if (sectionIndex != -1) {
+                                    val section = sections[sectionIndex]
+                                    val updatedProducts = section.products.toMutableList()
+                                    updatedProducts.add(ProductData(product = saved, weightG = 0.0))
+                                    sections[sectionIndex] = section.copy(products = updatedProducts)
+                                }
+                                activeSectionIdForSearch = null
+                            },
+                            onError = { message ->
+                                dialogError = message
                             }
-                            activeSectionIdForSearch = null
-                        }
+                        )
                     }
                 )
             }
+        }
+    }
+}
+
+@Composable
+private fun SaveAsRecipeOption(
+    checked: Boolean,
+    onCheckedChange: (Boolean) -> Unit,
+    modifier: Modifier = Modifier
+) {
+    Surface(
+        modifier = modifier
+            .fillMaxWidth()
+            .clickable { onCheckedChange(!checked) },
+        shape = RoundedCornerShape(12.dp),
+        color = if (checked) {
+            MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.55f)
+        } else {
+            MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.45f)
+        },
+        border = BorderStroke(
+            width = 1.dp,
+            color = if (checked) {
+                MaterialTheme.colorScheme.primary
+            } else {
+                MaterialTheme.colorScheme.outlineVariant
+            }
+        )
+    ) {
+        Row(
+            modifier = Modifier.padding(horizontal = 12.dp, vertical = 10.dp),
+            verticalAlignment = Alignment.Top
+        ) {
+            Column(modifier = Modifier.weight(1f).padding(end = 8.dp)) {
+                Text(
+                    "Zapisz też jako przepis",
+                    style = MaterialTheme.typography.titleSmall,
+                    fontWeight = FontWeight.SemiBold
+                )
+                Spacer(modifier = Modifier.height(4.dp))
+                Text(
+                    "Opcjonalnie. Sekcje i składniki trafią do „Moje przepisy”, żeby następnym razem szybciej utworzyć tę samą patelnię.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+            Checkbox(
+                checked = checked,
+                onCheckedChange = onCheckedChange
+            )
         }
     }
 }
@@ -734,6 +868,7 @@ fun SectionItem(
 fun MealCard(
     meal: BatchMealDto,
     onTakePortion: () -> Unit,
+    onEdit: () -> Unit,
     onDelete: () -> Unit
 ) {
     var showDeleteConfirmation by remember { mutableStateOf(false) }
@@ -780,6 +915,13 @@ fun MealCard(
                     fontWeight = FontWeight.Bold,
                     modifier = Modifier.weight(1f)
                 )
+                IconButton(onClick = onEdit) {
+                    Icon(
+                        Icons.Default.Edit,
+                        contentDescription = "Edytuj wagę sekcji",
+                        tint = MaterialTheme.colorScheme.primary.copy(alpha = 0.8f)
+                    )
+                }
                 IconButton(onClick = { showDeleteConfirmation = true }) {
                     Icon(
                         Icons.Default.Delete,
@@ -826,6 +968,120 @@ fun MealCard(
             }
         }
     }
+}
+
+@Composable
+fun EditBatchMealDialog(
+    meal: BatchMealDto,
+    viewModel: MainViewModel,
+    onDismiss: () -> Unit,
+    onSave: (Map<Long, Double>) -> Unit
+) {
+    val cookedWeights = remember(meal) {
+        mutableStateMapOf<Long, String>().apply {
+            meal.segments.forEach { segment ->
+                this[segment.id] = segment.initialWeightG.toString().removeSuffix(".0")
+            }
+        }
+    }
+    val tareEnabledBySegment = remember(meal) {
+        mutableStateMapOf<Long, Boolean>().apply {
+            meal.segments.forEach { this[it.id] = false }
+        }
+    }
+    val selectedContainerBySegment = remember(meal) {
+        mutableStateMapOf<Long, Long?>().apply {
+            meal.segments.forEach { this[it.id] = null }
+        }
+    }
+    val containers by viewModel.containers.collectAsState()
+
+    LaunchedEffect(Unit) { viewModel.loadContainers() }
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Edytuj patelnię: ${meal.name}") },
+        text = {
+            Column(
+                modifier = Modifier.fillMaxWidth().verticalScroll(rememberScrollState()),
+                verticalArrangement = Arrangement.spacedBy(12.dp)
+            ) {
+                Text(
+                    "Ustaw wagę gotową każdej sekcji po ugotowaniu. Tarę naczynia włącz osobno dla sekcji, którą ważysz.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                meal.segments.forEach { segment ->
+                    val segmentTareEnabled = tareEnabledBySegment[segment.id] == true
+                    Column(
+                        modifier = Modifier.fillMaxWidth().border(
+                            BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
+                            RoundedCornerShape(12.dp)
+                        ).padding(12.dp)
+                    ) {
+                        Text(segment.name, fontWeight = FontWeight.Bold)
+                        segment.rawWeightG?.let { raw ->
+                            if (raw != segment.initialWeightG) {
+                                Text(
+                                    "Składniki: ${raw.toInt()}g",
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            }
+                        }
+                        OutlinedTextField(
+                            value = cookedWeights[segment.id] ?: "",
+                            onValueChange = { cookedWeights[segment.id] = it },
+                            modifier = Modifier.fillMaxWidth().padding(top = 8.dp),
+                            label = {
+                                Text(
+                                    if (segmentTareEnabled) "Waga brutto gotowa (g)" else "Waga gotowa (g)"
+                                )
+                            },
+                            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                            singleLine = true
+                        )
+                        TareWeightSelector(
+                            containers = containers,
+                            enabled = segmentTareEnabled,
+                            onEnabledChange = { tareEnabledBySegment[segment.id] = it },
+                            selectedContainerId = selectedContainerBySegment[segment.id],
+                            onContainerSelected = { selectedContainerBySegment[segment.id] = it },
+                            grossWeightText = cookedWeights[segment.id] ?: "",
+                            onGrossWeightChange = {},
+                            modifier = Modifier.padding(top = 8.dp),
+                            showGrossInput = false
+                        )
+                    }
+                }
+            }
+        },
+        confirmButton = {
+            Button(onClick = {
+                val parsed = cookedWeights.mapNotNull { (segmentId, value) ->
+                    val sectionTareEnabled = tareEnabledBySegment[segmentId] == true
+                    val weight = if (sectionTareEnabled) {
+                        resolveNetWeight(
+                            enabled = true,
+                            grossWeightText = value,
+                            selectedContainerId = selectedContainerBySegment[segmentId],
+                            containers = containers
+                        )
+                    } else {
+                        value.toDoubleOrNull()
+                    } ?: return@mapNotNull null
+                    if (weight <= 0) return@mapNotNull null
+                    segmentId to weight
+                }.toMap()
+                onSave(parsed)
+            }) {
+                Text("Zapisz")
+            }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss) { Text("Anuluj") }
+        }
+    )
 }
 
 @Composable

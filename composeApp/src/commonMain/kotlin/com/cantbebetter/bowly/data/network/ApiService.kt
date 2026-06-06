@@ -15,7 +15,6 @@ class ApiService(private val baseUrl: String, private val token: String? = null)
         install(ContentNegotiation) {
             json(Json {
                 ignoreUnknownKeys = true
-                prettyPrint = true
                 isLenient = true
             })
         }
@@ -162,6 +161,18 @@ class ApiService(private val baseUrl: String, private val token: String? = null)
         return response.status.isSuccess()
     }
 
+    suspend fun updateSegmentCookedWeight(
+        batchMealId: Long,
+        segmentId: Long,
+        request: UpdateSegmentCookedWeightRequest
+    ): BatchMealDto {
+        return client.put("$baseUrl/api/batch-meals/$batchMealId/segments/$segmentId") {
+            auth()
+            contentType(ContentType.Application.Json)
+            setBody(request)
+        }.body()
+    }
+
     suspend fun consumePortion(request: ConsumePortionRequest): Boolean {
         val response = client.post("$baseUrl/api/batch-meals/consume") {
             auth()
@@ -257,6 +268,36 @@ class ApiService(private val baseUrl: String, private val token: String? = null)
 
     suspend fun deleteWorkout(id: Long): Boolean {
         val response = client.delete("$baseUrl/api/workouts/$id") {
+            auth()
+        }
+        return response.status.isSuccess()
+    }
+
+    // Weighing containers (tara)
+    suspend fun getContainers(): List<WeighingContainerDto> {
+        return client.get("$baseUrl/api/containers") {
+            auth()
+        }.body()
+    }
+
+    suspend fun createContainer(request: CreateWeighingContainerRequest): WeighingContainerDto {
+        return client.post("$baseUrl/api/containers") {
+            auth()
+            contentType(ContentType.Application.Json)
+            setBody(request)
+        }.body()
+    }
+
+    suspend fun updateContainer(id: Long, request: UpdateWeighingContainerRequest): WeighingContainerDto {
+        return client.put("$baseUrl/api/containers/$id") {
+            auth()
+            contentType(ContentType.Application.Json)
+            setBody(request)
+        }.body()
+    }
+
+    suspend fun deleteContainer(id: Long): Boolean {
+        val response = client.delete("$baseUrl/api/containers/$id") {
             auth()
         }
         return response.status.isSuccess()

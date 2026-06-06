@@ -8,6 +8,7 @@ import com.cantbebetter.bowly.models.DailyStats
 import com.cantbebetter.bowly.models.MealTypeMapper
 import com.cantbebetter.bowly.ui.screens.isLikelyBarcode
 import com.cantbebetter.bowly.ui.screens.toCreateBatchMealRequest
+import io.ktor.client.plugins.ClientRequestException
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -83,6 +84,9 @@ class MainViewModel(private val settingsManager: SettingsManager) : ViewModel() 
     private val _scannedProduct = MutableStateFlow<ProductDto?>(null)
     val scannedProduct = _scannedProduct.asStateFlow()
 
+    private val _containers = MutableStateFlow<List<WeighingContainerDto>>(emptyList())
+    val containers = _containers.asStateFlow()
+
     private var apiService: ApiService? = null
 
     init {
@@ -91,8 +95,7 @@ class MainViewModel(private val settingsManager: SettingsManager) : ViewModel() 
 
     fun setServerAddress(url: String) {
         if (url.isBlank()) {
-            settingsManager.baseUrl = ""
-            _uiState.value = AppState.EnterServerAddress
+            _error.value = "Adres serwera nie może być pusty"
             return
         }
         var sanitizedUrl = url.trim().removeSuffix("/")
@@ -103,6 +106,21 @@ class MainViewModel(private val settingsManager: SettingsManager) : ViewModel() 
         _error.value = null
         checkStatus()
     }
+
+    fun openChangeServerAddress() {
+        _error.value = null
+        _uiState.value = AppState.EnterServerAddress
+    }
+
+    fun cancelChangeServerAddress() {
+        _error.value = null
+        if (!settingsManager.baseUrl.isNullOrBlank()) {
+            _uiState.value = AppState.LoginRequired
+        }
+    }
+
+    val currentServerAddress: String?
+        get() = settingsManager.baseUrl?.takeIf { it.isNotBlank() }
 
     fun checkStatus() {
         val baseUrl = settingsManager.baseUrl
@@ -150,6 +168,11 @@ class MainViewModel(private val settingsManager: SettingsManager) : ViewModel() 
                     settingsManager.username = response.username ?: request.username
                     settingsManager.role = response.role
                     apiService = ApiService(settingsManager.baseUrl!!, response.token)
+                    val profile = apiService?.getUserProfile()
+                    if (profile != null) {
+                        _userProfile.value = profile
+                        _dailyStats.value = calculateDailyStats(profile)
+                    }
                     _uiState.value = AppState.Authenticated
                 }
             } catch (e: Exception) {
@@ -393,19 +416,87 @@ class MainViewModel(private val settingsManager: SettingsManager) : ViewModel() 
     }
 
     suspend fun ensureProductSaved(product: ProductDto): ProductDto {
-        if (product.id != null) return product
-        return apiService?.saveLocalProduct(product) ?: product
+        val service = apiService ?: return product
+        return try {
+            service.saveLocalProduct(product)
+        } catch (_: Exception) {
+            if (product.id != null) {
+                service.saveLocalProduct(product.copy(id = null))
+            } else {
+                throw IllegalStateException("Nie udało się zapisać produktu: ${product.name}")
+            }
+        }
     }
 
-    fun cacheProduct(product: ProductDto, onResult: (ProductDto) -> Unit) {
+    private suspend fun prepareBatchMealRequest(request: CreateBatchMealRequest): CreateBatchMealRequest {
+        val segments = request.segments.map { segment ->
+            val savedProducts = segment.products.orEmpty().map { ensureProductSaved(it) }
+            val primary = savedProducts.firstOrNull()
+                ?: segment.product?.let { ensureProductSaved(it) }
+            segment.copy(
+                productId = primary?.id,
+                product = primary,
+                products = savedProducts.ifEmpty { primary?.let { listOf(it) } }
+            )
+        }
+        val recipeSections = request.recipeSections.map { section ->
+            section.copy(
+                ingredients = section.ingredients.map { ingredient ->
+                    val saved = ingredient.product?.let { ensureProductSaved(it) }
+                    ingredient.copy(
+                        productId = saved?.id?.toLongOrNull() ?: ingredient.productId,
+                        product = saved ?: ingredient.product
+                    )
+                }
+            )
+        }
+        if (segments.isEmpty()) {
+            throw IllegalArgumentException("Patelnia musi mieć co najmniej jedną sekcję ze składnikami")
+        }
+        return request.copy(segments = segments, recipeSections = recipeSections)
+    }
+
+    private fun formatUserFacingError(e: Exception): String {
+        val clientError = e as? ClientRequestException
+        if (clientError != null) {
+            val status = clientError.response.status.value
+            val raw = clientError.message.orEmpty()
+            val serverMessage = extractServerErrorMessage(raw)
+            return when (status) {
+                400 -> serverMessage ?: "Serwer odrzucił dane patelni (400). Zaktualizuj backend i sprawdź składniki."
+                else -> serverMessage ?: "Błąd serwera ($status)"
+            }
+        }
+        return when (e) {
+            is IllegalArgumentException, is IllegalStateException -> e.message ?: "Nie udało się utworzyć patelni"
+            else -> "Błąd tworzenia patelni: ${e.message}"
+        }
+    }
+
+    private fun extractServerErrorMessage(raw: String): String? {
+        if (raw.isBlank()) return null
+        Regex(""""message"\s*:\s*"([^"]+)"""").find(raw)?.groupValues?.getOrNull(1)?.let { return it }
+        Regex(""""error"\s*:\s*"([^"]+)"""").find(raw)?.groupValues?.getOrNull(1)?.let { return it }
+        return null
+    }
+
+    fun cacheProduct(
+        product: ProductDto,
+        onError: ((String) -> Unit)? = null,
+        onResult: (ProductDto) -> Unit
+    ) {
         viewModelScope.launch {
             try {
                 val saved = ensureProductSaved(product)
                 loadLocalProducts()
                 onResult(saved)
             } catch (e: Exception) {
-                _error.value = "Błąd zapisywania produktu: ${e.message}"
-                onResult(product)
+                val message = "Błąd zapisywania produktu: ${e.message}"
+                if (onError != null) {
+                    onError(message)
+                } else {
+                    _error.value = message
+                }
             }
         }
     }
@@ -545,14 +636,29 @@ class MainViewModel(private val settingsManager: SettingsManager) : ViewModel() 
         onComplete: (() -> Unit)? = null
     ) = createBatchMeal(batchRequest, onComplete)
 
-    fun createBatchMeal(request: CreateBatchMealRequest, onComplete: (() -> Unit)? = null) {
+    fun createBatchMeal(
+        request: CreateBatchMealRequest,
+        onComplete: (() -> Unit)? = null,
+        onError: ((String) -> Unit)? = null
+    ) {
         viewModelScope.launch {
             try {
-                apiService?.createBatchMeal(request)
+                if (request.segments.isEmpty()) {
+                    throw IllegalArgumentException("Patelnia musi mieć co najmniej jedną sekcję ze składnikami")
+                }
+                val prepared = prepareBatchMealRequest(request)
+                val service = apiService
+                    ?: throw IllegalStateException("Brak połączenia z serwerem")
+                service.createBatchMeal(prepared)
                 refreshActiveBatchMeals()
                 onComplete?.invoke()
             } catch (e: Exception) {
-                _error.value = "Błąd tworzenia patelni: ${e.message}"
+                val message = formatUserFacingError(e)
+                if (onError != null) {
+                    onError(message)
+                } else {
+                    _error.value = message
+                }
             }
         }
     }
@@ -622,6 +728,33 @@ class MainViewModel(private val settingsManager: SettingsManager) : ViewModel() 
                 }
             } catch (e: Exception) {
                 _error.value = "Błąd usuwania patelni: ${e.message}"
+            }
+        }
+    }
+
+    fun updateBatchMealCookedWeights(
+        meal: BatchMealDto,
+        cookedWeights: Map<Long, Double>,
+        onComplete: (() -> Unit)? = null
+    ) {
+        viewModelScope.launch {
+            try {
+                val service = apiService ?: throw IllegalStateException("Brak połączenia z serwerem")
+                var latestMeal = meal
+                cookedWeights.forEach { (segmentId, cookedWeightG) ->
+                    val current = meal.segments.find { it.id == segmentId }?.initialWeightG
+                    if (cookedWeightG > 0 && current != cookedWeightG) {
+                        latestMeal = service.updateSegmentCookedWeight(
+                            meal.id,
+                            segmentId,
+                            UpdateSegmentCookedWeightRequest(cookedWeightG)
+                        )
+                    }
+                }
+                refreshActiveBatchMeals()
+                onComplete?.invoke()
+            } catch (e: Exception) {
+                _error.value = "Błąd aktualizacji wagi sekcji: ${e.message}"
             }
         }
     }
@@ -718,13 +851,72 @@ class MainViewModel(private val settingsManager: SettingsManager) : ViewModel() 
         }
     }
 
+    fun loadContainers() {
+        viewModelScope.launch {
+            try {
+                _containers.value = apiService?.getContainers() ?: emptyList()
+            } catch (e: Exception) {
+                _error.value = "Błąd pobierania naczyń: ${e.message}"
+            }
+        }
+    }
+
+    fun createContainer(request: CreateWeighingContainerRequest, onComplete: (() -> Unit)? = null) {
+        viewModelScope.launch {
+            try {
+                apiService?.createContainer(request)
+                loadContainers()
+                onComplete?.invoke()
+            } catch (e: Exception) {
+                _error.value = "Błąd dodawania naczynia: ${e.message}"
+            }
+        }
+    }
+
+    fun updateContainer(id: Long, request: UpdateWeighingContainerRequest, onComplete: (() -> Unit)? = null) {
+        viewModelScope.launch {
+            try {
+                apiService?.updateContainer(id, request)
+                loadContainers()
+                onComplete?.invoke()
+            } catch (e: Exception) {
+                _error.value = "Błąd aktualizacji naczynia: ${e.message}"
+            }
+        }
+    }
+
+    fun deleteContainer(id: Long) {
+        viewModelScope.launch {
+            try {
+                val success = apiService?.deleteContainer(id) ?: false
+                if (success) {
+                    loadContainers()
+                } else {
+                    _error.value = "Nie udało się usunąć naczynia"
+                }
+            } catch (e: Exception) {
+                _error.value = "Błąd usuwania naczynia: ${e.message}"
+            }
+        }
+    }
+
     fun clearError() {
         _error.value = null
     }
 
     fun logout() {
-        settingsManager.clear()
-        _uiState.value = AppState.EnterServerAddress
+        settingsManager.clearSession()
+        _userProfile.value = null
+        _dailyStats.value = null
+        _dailySummary.value = null
+        _error.value = null
+        val baseUrl = settingsManager.baseUrl
+        if (baseUrl.isNullOrBlank()) {
+            _uiState.value = AppState.EnterServerAddress
+        } else {
+            apiService = ApiService(baseUrl, null)
+            _uiState.value = AppState.LoginRequired
+        }
     }
 
     private fun mergeSearchResults(
