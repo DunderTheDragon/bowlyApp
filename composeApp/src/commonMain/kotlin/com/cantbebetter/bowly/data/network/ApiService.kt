@@ -10,8 +10,12 @@ import io.ktor.http.*
 import io.ktor.serialization.kotlinx.json.*
 import kotlinx.serialization.json.Json
 
-class ApiService(private val baseUrl: String, private val token: String? = null) {
-    val client = HttpClient {
+class ApiService(
+    private val baseUrl: String,
+    private val token: String? = null,
+    httpClient: HttpClient? = null
+) {
+    val client = httpClient ?: HttpClient {
         install(ContentNegotiation) {
             json(Json {
                 ignoreUnknownKeys = true
